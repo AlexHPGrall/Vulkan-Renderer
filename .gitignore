@@ -1,0 +1,7 @@
+*~
+*.swn
+*.swp
+*.swo
+build/
+.vscode/
+data/
