@@ -63,6 +63,7 @@ struct VulkanData
     VkPipelineLayout PipelineLayout;
     u32 CurrentFrame;
     VkBuffer VertexBuffer;
+    VkCommandPool CommandPool;
 };
 
 struct v2

@@ -79,6 +79,78 @@ u32 FindMemoryType(u32 TypeFilter, VkMemoryPropertyFlags Properties) {
     return -1;
 
 }
+void CopyBuffer(VkBuffer srcBuffer, VkBuffer dstBuffer, VkDeviceSize Size) 
+{
+    VkDevice LogicalDevice =GlobalVulkanData.LogicalDevice;
+    VkQueue GraphicsQueue = GlobalVulkanData.GraphicsQueue;
+    VkCommandPool CommandPool=GlobalVulkanData.CommandPool;
+
+    VkCommandBufferAllocateInfo AllocInfo{};
+    AllocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    AllocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    AllocInfo.commandPool = CommandPool;
+    AllocInfo.commandBufferCount = 1;
+
+    VkCommandBuffer CommandBuffer;
+    vkAllocateCommandBuffers(LogicalDevice, &AllocInfo, &CommandBuffer);
+
+    VkCommandBufferBeginInfo BeginInfo{};
+    BeginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    BeginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+
+    vkBeginCommandBuffer(CommandBuffer, &BeginInfo);
+
+    VkBufferCopy CopyRegion{};
+    CopyRegion.size = Size;
+    vkCmdCopyBuffer(CommandBuffer, srcBuffer, dstBuffer, 1, &CopyRegion);
+
+    vkEndCommandBuffer(CommandBuffer);
+
+    VkSubmitInfo SubmitInfo{};
+    SubmitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    SubmitInfo.commandBufferCount = 1;
+    SubmitInfo.pCommandBuffers = &CommandBuffer;
+
+    vkQueueSubmit(GraphicsQueue, 1, &SubmitInfo, VK_NULL_HANDLE);
+    vkQueueWaitIdle(GraphicsQueue);
+
+    vkFreeCommandBuffers(LogicalDevice, CommandPool, 1, &CommandBuffer);
+}
+
+void CreateVulkanBuffer(VkDeviceSize Size, VkBufferUsageFlags Usage, VkMemoryPropertyFlags Properties,
+                        VkBuffer *Buffer, VkDeviceMemory *BufferMemory)
+{
+    VkDevice LogicalDevice = GlobalVulkanData.LogicalDevice;
+    VkBufferCreateInfo BufferInfo{};
+    
+    BufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    BufferInfo.size = Size; 
+    BufferInfo.usage = Usage;
+    BufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+    if (vkCreateBuffer(LogicalDevice, &BufferInfo, NULL, Buffer) != VK_SUCCESS)
+    {
+                MessageBox(NULL, "Failed to create Vertex Buffer!",
+                            ENGINE_NAME, MB_ICONERROR);
+    }
+    VkMemoryRequirements MemRequirements;
+    vkGetBufferMemoryRequirements(LogicalDevice, *Buffer, &MemRequirements);
+
+    VkMemoryAllocateInfo BufferAllocInfo{};
+    BufferAllocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    BufferAllocInfo.allocationSize = MemRequirements.size;
+    BufferAllocInfo.memoryTypeIndex = 
+    FindMemoryType(MemRequirements.memoryTypeBits, 
+    Properties);
+
+    if (vkAllocateMemory(LogicalDevice, &BufferAllocInfo, NULL, BufferMemory) != VK_SUCCESS) 
+    {
+            MessageBox(NULL, "Failed to allocate Vertex Buffer memory!",
+                        ENGINE_NAME, MB_ICONERROR);
+    }
+
+    vkBindBufferMemory(LogicalDevice, *Buffer, *BufferMemory, 0);
+}
 
 void *VulkanMemAlloc(u32 Size)
 {
@@ -761,43 +833,6 @@ void Win32InitVulkan(HWND Window, HINSTANCE hInst)
     */
 
 
-    /*Create Vertex Buffer*/
-    VkBufferCreateInfo BufferInfo{};
-    
-    BufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    BufferInfo.size = sizeof(Vertex) *VERTEX_COUNT; 
-    BufferInfo.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
-    BufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-
-    VkBuffer VertexBuffer;
-    if (vkCreateBuffer(LogicalDevice, &BufferInfo, NULL, &VertexBuffer) != VK_SUCCESS)
-    {
-                MessageBox(NULL, "Failed to create Vertex Buffer!",
-                            ENGINE_NAME, MB_ICONERROR);
-    }
-    VkMemoryRequirements MemRequirements;
-    vkGetBufferMemoryRequirements(LogicalDevice, VertexBuffer, &MemRequirements);
-
-    VkMemoryAllocateInfo VertexBufferAllocInfo{};
-    VertexBufferAllocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-    VertexBufferAllocInfo.allocationSize = MemRequirements.size;
-    VertexBufferAllocInfo.memoryTypeIndex = 
-    FindMemoryType(MemRequirements.memoryTypeBits, 
-    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-
-    VkDeviceMemory VertexBufferMemory;
-    if (vkAllocateMemory(LogicalDevice, &VertexBufferAllocInfo, NULL, &VertexBufferMemory) != VK_SUCCESS) 
-    {
-            MessageBox(NULL, "Failed to allocate Vertex Buffer memory!",
-                        ENGINE_NAME, MB_ICONERROR);
-    }
-
-    vkBindBufferMemory(LogicalDevice, VertexBuffer, VertexBufferMemory, 0);
-
-    void* Data;
-    vkMapMemory(LogicalDevice, VertexBufferMemory, 0, BufferInfo.size, 0, &Data);
-    memcpy(Data, Vertices, (size_t) BufferInfo.size);
-    vkUnmapMemory(LogicalDevice, VertexBufferMemory);
    /*Command Buffer*/
 
     /*Create Command Pool*/
@@ -814,6 +849,7 @@ void Win32InitVulkan(HWND Window, HINSTANCE hInst)
                             ENGINE_NAME, MB_ICONERROR);
     }
     
+    GlobalVulkanData.CommandPool=CommandPool;
     /*Command Buffer Allocation*/
     VkCommandBuffer CommandBuffers[MAX_FRAMES_IN_FLIGHT]={};
 
@@ -827,6 +863,30 @@ void Win32InitVulkan(HWND Window, HINSTANCE hInst)
                 MessageBox(NULL, "Failed to Allocate Command Buffers!",
                             ENGINE_NAME, MB_ICONERROR);
     }
+
+    /*Create Vertex Buffer*/
+    VkBuffer VertexBuffer;
+    VkDeviceMemory VertexBufferMemory;
+    VkBuffer StagingBuffer;
+    VkDeviceMemory StagingBufferMemory;
+
+    VkDeviceSize BufferSize=sizeof(Vertex)*VERTEX_COUNT;
+    CreateVulkanBuffer(BufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, 
+    &StagingBuffer, &StagingBufferMemory);
+    void* Data;
+    vkMapMemory(LogicalDevice,StagingBufferMemory, 0, BufferSize, 0, &Data);
+    memcpy(Data, Vertices, (size_t) BufferSize);
+    vkUnmapMemory(LogicalDevice, StagingBufferMemory);
+
+    CreateVulkanBuffer(BufferSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+    VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, 
+    &VertexBuffer, &VertexBufferMemory);
+
+    CopyBuffer(StagingBuffer, VertexBuffer, BufferSize);
+
+    vkDestroyBuffer(LogicalDevice, StagingBuffer, NULL);
+    vkFreeMemory(LogicalDevice, StagingBufferMemory, NULL);
 
 
     /*Create Semaphores*/
