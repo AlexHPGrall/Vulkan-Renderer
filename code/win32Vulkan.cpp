@@ -870,25 +870,46 @@ void Win32InitVulkan(HWND Window, HINSTANCE hInst)
     VkBuffer StagingBuffer;
     VkDeviceMemory StagingBufferMemory;
 
-    VkDeviceSize BufferSize=sizeof(Vertex)*VERTEX_COUNT;
-    CreateVulkanBuffer(BufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+    VkDeviceSize VertexBufferSize=sizeof(Vertex)*VERTEX_COUNT;
+    CreateVulkanBuffer(VertexBufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
     VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, 
     &StagingBuffer, &StagingBufferMemory);
     void* Data;
-    vkMapMemory(LogicalDevice,StagingBufferMemory, 0, BufferSize, 0, &Data);
-    memcpy(Data, Vertices, (size_t) BufferSize);
+    vkMapMemory(LogicalDevice,StagingBufferMemory, 0, VertexBufferSize, 0, &Data);
+    memcpy(Data, Vertices, (size_t) VertexBufferSize);
     vkUnmapMemory(LogicalDevice, StagingBufferMemory);
 
-    CreateVulkanBuffer(BufferSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+    CreateVulkanBuffer(VertexBufferSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
     VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, 
     &VertexBuffer, &VertexBufferMemory);
 
-    CopyBuffer(StagingBuffer, VertexBuffer, BufferSize);
+    CopyBuffer(StagingBuffer, VertexBuffer, VertexBufferSize);
 
     vkDestroyBuffer(LogicalDevice, StagingBuffer, NULL);
     vkFreeMemory(LogicalDevice, StagingBufferMemory, NULL);
 
+    /*Create Index Buffer*/
+    VkBuffer IndexBuffer;
+    VkDeviceMemory IndexBufferMemory;
 
+    VkDeviceSize IndexBufferSize=sizeof(Indices[0])*INDEX_COUNT;
+    CreateVulkanBuffer(IndexBufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, 
+    &StagingBuffer, &StagingBufferMemory);
+    void* IndexData;
+    vkMapMemory(LogicalDevice,StagingBufferMemory, 0, IndexBufferSize, 0, &IndexData);
+    memcpy(IndexData, Indices, (size_t) IndexBufferSize);
+    vkUnmapMemory(LogicalDevice, StagingBufferMemory);
+
+    CreateVulkanBuffer(IndexBufferSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+    VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, 
+    &IndexBuffer, &IndexBufferMemory);
+
+    CopyBuffer(StagingBuffer,IndexBuffer, IndexBufferSize);
+
+    vkDestroyBuffer(LogicalDevice, StagingBuffer, NULL);
+    vkFreeMemory(LogicalDevice, StagingBufferMemory, NULL);
+    
     /*Create Semaphores*/
     VkSemaphore ImageAvailableSemaphores[MAX_FRAMES_IN_FLIGHT];
     VkSemaphore RenderFinishedSemaphores[MAX_FRAMES_IN_FLIGHT];
@@ -919,6 +940,7 @@ void Win32InitVulkan(HWND Window, HINSTANCE hInst)
     }
     GlobalVulkanData.CurrentFrame=0;
     GlobalVulkanData.VertexBuffer=VertexBuffer;
+    GlobalVulkanData.IndexBuffer=IndexBuffer;
     
 }
  void RecordCommandBuffer(VkCommandBuffer CommandBuffer, u32 ImageIndex) 
@@ -928,6 +950,7 @@ void Win32InitVulkan(HWND Window, HINSTANCE hInst)
         VkPipeline GraphicsPipeline = GlobalVulkanData.GraphicsPipeline;
         VkExtent2D Extent = GlobalVulkanData.Extent;
         VkBuffer VertexBuffer=GlobalVulkanData.VertexBuffer;
+        VkBuffer IndexBuffer=GlobalVulkanData.IndexBuffer;
 
         u32 ImageCount=GlobalVulkanData.ImageCount;
 
@@ -959,9 +982,11 @@ void Win32InitVulkan(HWND Window, HINSTANCE hInst)
         VkBuffer VertexBuffers[] = {VertexBuffer};
         VkDeviceSize Offsets[] = {0};
         vkCmdBindVertexBuffers(CommandBuffer, 0, 1, VertexBuffers, Offsets);
+        vkCmdBindIndexBuffer(CommandBuffer, IndexBuffer, 0, VK_INDEX_TYPE_UINT16);
+        
         
 
-        vkCmdDraw(CommandBuffer, VERTEX_COUNT, 1, 0, 0);
+        vkCmdDrawIndexed(CommandBuffer, (u32)(INDEX_COUNT), 1, 0, 0,0);
 
         vkCmdEndRenderPass(CommandBuffer);
 

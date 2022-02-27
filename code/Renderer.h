@@ -28,7 +28,8 @@ typedef bool b32;
 #define Terabytes(value) (Gigabytes(value) * 1024LL)
 
 #define MAX_FRAMES_IN_FLIGHT 2
-#define VERTEX_COUNT 3
+#define VERTEX_COUNT 4
+#define INDEX_COUNT 6
 
 struct File
 {
@@ -63,6 +64,7 @@ struct VulkanData
     VkPipelineLayout PipelineLayout;
     u32 CurrentFrame;
     VkBuffer VertexBuffer;
+    VkBuffer IndexBuffer;
     VkCommandPool CommandPool;
 };
 
@@ -93,10 +95,14 @@ struct Vertex
 
 static Vertex Vertices[VERTEX_COUNT] =
 {
-    {{0.0f, -0.5f}, {1.0f, 0.0f, 0.0f}},
-    {{0.5f, 0.5f}, {0.0f, 1.0f, 0.0f}},
-    {{-0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}}
+    {{-0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}},
+    {{0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}},
+    {{0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}},
+    {{-0.5f, 0.5f}, {1.0f, 1.0f, 1.0f}}
 };
+
+static u16 Indices[]={0,1,2,2,3,0};
+
 //Depends on vertex format, so we might change that later
 
 //Tells how to load vertex data
