@@ -19,6 +19,7 @@ typedef bool b32;
 
 #define ArrayCount(Array) (sizeof(Array) / sizeof((Array)[0]))
 #define Assert assert 
+#define OFFSETOF(TYPE, ELEMENT) ((size_t)&(((TYPE *)0)->ELEMENT))
 
 //macros operate on 32 bits by default so we need to specify the use of long long (64 bits)
 #define Kilobytes(value) ((value)*1024LL)
@@ -27,6 +28,7 @@ typedef bool b32;
 #define Terabytes(value) (Gigabytes(value) * 1024LL)
 
 #define MAX_FRAMES_IN_FLIGHT 2
+#define VERTEX_COUNT 3
 
 struct File
 {
@@ -60,7 +62,68 @@ struct VulkanData
     VkExtent2D Extent;
     VkPipelineLayout PipelineLayout;
     u32 CurrentFrame;
+    VkBuffer VertexBuffer;
 };
+
+struct v2
+{
+    f32 x;
+    f32 y;
+};
+
+union v3
+{
+   struct
+   {
+       f32 x,y,z;
+   };
+   struct
+   {
+       f32 r,g,b;
+   };
+};
+
+struct Vertex
+{
+    v2 Position;
+    v3 Color;
+};
+
+
+static Vertex Vertices[VERTEX_COUNT] =
+{
+    {{0.0f, -0.5f}, {1.0f, 0.0f, 0.0f}},
+    {{0.5f, 0.5f}, {0.0f, 1.0f, 0.0f}},
+    {{-0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}}
+};
+//Depends on vertex format, so we might change that later
+
+//Tells how to load vertex data
+static VkVertexInputBindingDescription GetBindingDescription()
+{
+        VkVertexInputBindingDescription BindingDescription{};
+        BindingDescription.binding = 0;
+        BindingDescription.stride = sizeof(Vertex);
+        BindingDescription.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+
+        return BindingDescription;
+}
+//Tells how to handle vertex data
+
+
+static VkVertexInputAttributeDescription AttributeDescriptions[2];
+static VkVertexInputAttributeDescription *GetAttributeDescription()
+{
+    AttributeDescriptions[0].binding = 0;
+    AttributeDescriptions[0].location = 0;
+    AttributeDescriptions[0].format = VK_FORMAT_R32G32_SFLOAT;
+    AttributeDescriptions[0].offset = OFFSETOF(Vertex, Position);
+    AttributeDescriptions[1].binding = 0;
+    AttributeDescriptions[1].location = 1;
+    AttributeDescriptions[1].format = VK_FORMAT_R32G32B32_SFLOAT;
+    AttributeDescriptions[1].offset = OFFSETOF(Vertex, Color);
+    return AttributeDescriptions;
+}
 
 inline i32
 Clamp(i32 Min, i32 Value, i32 Max)

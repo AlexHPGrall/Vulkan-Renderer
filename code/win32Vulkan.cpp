@@ -13,91 +13,18 @@
 #include "vulkan/vk_platform.h"
 #include "vulkan/vulkan_win32.h"
 #include "./Renderer.h"
+//Validation Layer stuff lifted almost straight from Vulkan Tutorial
+VkInstance gInstance;
+#include "./ValidationLayers.h"
 
 static b32 GlobalRunning;
+static b32 GlobalMinimized;
 static VulkanData GlobalVulkanData;
 
 //static win32_image_buffer GlobalBackBuffer;
 #define APPLICATION_NAME "Vulkan Example"
 #define ENGINE_NAME "Vulkan Engine"
 
-//Validation Layer stuff lifted almost straight from Vulkan Tutorial
-VkInstance gInstance;
-VkDebugUtilsMessengerEXT debugMessenger;
-const std::vector<const char*> validationLayers = {
-    "VK_LAYER_KHRONOS_validation"
-};
-
-#ifdef NDEBUG
-    const bool enableValidationLayers = false;
-#else
-    const bool enableValidationLayers = true;
-#endif
-
-VkResult CreateDebugUtilsMessengerEXT(VkInstance instance, const VkDebugUtilsMessengerCreateInfoEXT* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkDebugUtilsMessengerEXT* pDebugMessenger) {
-    auto func = (PFN_vkCreateDebugUtilsMessengerEXT) vkGetInstanceProcAddr(instance, "vkCreateDebugUtilsMessengerEXT");
-    if (func != nullptr) {
-        return func(instance, pCreateInfo, pAllocator, pDebugMessenger);
-    } else {
-        return VK_ERROR_EXTENSION_NOT_PRESENT;
-    }
-}
-
-void DestroyDebugUtilsMessengerEXT(VkInstance instance, VkDebugUtilsMessengerEXT debugMessenger, const VkAllocationCallbacks* pAllocator) {
-    auto func = (PFN_vkDestroyDebugUtilsMessengerEXT) vkGetInstanceProcAddr(instance, "vkDestroyDebugUtilsMessengerEXT");
-    if (func != nullptr) {
-        func(instance, debugMessenger, pAllocator);
-    }
-}
-
-
-bool checkValidationLayerSupport() {
-    uint32_t layerCount;
-    vkEnumerateInstanceLayerProperties(&layerCount, nullptr);
-
-    std::vector<VkLayerProperties> availableLayers(layerCount);
-    vkEnumerateInstanceLayerProperties(&layerCount, availableLayers.data());
-
-    for (const char* layerName : validationLayers) {
-        bool layerFound = false;
-
-        for (const auto& layerProperties : availableLayers) {
-            if (strcmp(layerName, layerProperties.layerName) == 0) {
-                layerFound = true;
-                break;
-            }
-        }
-
-        if (!layerFound) {
-            return false;
-        }
-    }
-
-    return true;
-}
-
-static VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity, VkDebugUtilsMessageTypeFlagsEXT messageType, const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData, void* pUserData) {
-        std::cerr << "validation layer: " << pCallbackData->pMessage << std::endl;
-
-        return VK_FALSE;
-    }
- void populateDebugMessengerCreateInfo(VkDebugUtilsMessengerCreateInfoEXT& createInfo) {
-        createInfo = {};
-        createInfo.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
-        createInfo.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
-        createInfo.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
-        createInfo.pfnUserCallback = debugCallback;
-    }
-void setupDebugMessenger() {
-        if (!enableValidationLayers) return;
-
-        VkDebugUtilsMessengerCreateInfoEXT createInfo;
-        populateDebugMessengerCreateInfo(createInfo);
-
-        if (CreateDebugUtilsMessengerEXT(gInstance, &createInfo, nullptr, &debugMessenger) != VK_SUCCESS) {
-            throw std::runtime_error("failed to set up debug messenger!");
-        }
-    }
 
 File win32ReadEntireFile(char *Filename)
 {
@@ -132,6 +59,25 @@ File win32ReadEntireFile(char *Filename)
     }
 
     return Result;
+}
+
+u32 FindMemoryType(u32 TypeFilter, VkMemoryPropertyFlags Properties) {
+    VkPhysicalDeviceMemoryProperties MemProperties;
+    VkPhysicalDevice PhysicalDevice = GlobalVulkanData.PhysicalDevice;
+    vkGetPhysicalDeviceMemoryProperties(PhysicalDevice, &MemProperties);
+
+    for (u32  MemTypeIndex= 0; MemTypeIndex < MemProperties.memoryTypeCount; MemTypeIndex++) 
+    {
+        if ((TypeFilter & (1 << MemTypeIndex)) 
+            && (MemProperties.memoryTypes[MemTypeIndex].propertyFlags & Properties) == Properties) 
+        {
+            return MemTypeIndex;
+        }
+    }
+    MessageBox(NULL, "Failed to find suitable memory type!",
+            ENGINE_NAME, MB_ICONINFORMATION);
+    return -1;
+
 }
 
 void *VulkanMemAlloc(u32 Size)
@@ -173,7 +119,7 @@ void win32CreateSwapchain(HWND Window)
         vkGetPhysicalDeviceSurfaceFormatsKHR(PhysicalDevice, Surface, &FormatCount, SwapchainFormats);
     }
     u32 PresentModeCount=0;
-    vkGetPhysicalDeviceSurfacePresentModesKHR(PhysicalDevice, Surface, &PresentModeCount, nullptr);
+    vkGetPhysicalDeviceSurfacePresentModesKHR(PhysicalDevice, Surface, &PresentModeCount, NULL);
 
     TotalSize+=sizeof(VkPresentModeKHR)*PresentModeCount;
     Assert(TotalSize<MemSize);
@@ -359,12 +305,16 @@ void win32CreateSwapchain(HWND Window)
     /*Fixed Funtions*/
     
     /*Vertex Input*/
-   VkPipelineVertexInputStateCreateInfo VertexInputInfo={};
+    VkVertexInputBindingDescription BindingDescritption = GetBindingDescription();
+    VkVertexInputAttributeDescription *AttributeDescriptions=
+        GetAttributeDescription();
+
+    VkPipelineVertexInputStateCreateInfo VertexInputInfo={};
     VertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-    VertexInputInfo.vertexBindingDescriptionCount = 0;
-    VertexInputInfo.pVertexBindingDescriptions = NULL; // Optional
-    VertexInputInfo.vertexAttributeDescriptionCount = 0;
-    VertexInputInfo.pVertexAttributeDescriptions = NULL; // Optional 
+    VertexInputInfo.vertexBindingDescriptionCount = 1;
+    VertexInputInfo.pVertexBindingDescriptions = &BindingDescritption; 
+    VertexInputInfo.vertexAttributeDescriptionCount = 2;
+    VertexInputInfo.pVertexAttributeDescriptions = AttributeDescriptions; 
 
     /*Input Assembly*/
    VkPipelineInputAssemblyStateCreateInfo InputAssemblyInfo={};
@@ -415,7 +365,7 @@ void win32CreateSwapchain(HWND Window)
     MultisamplingInfo.sampleShadingEnable = VK_FALSE;
     MultisamplingInfo.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
     MultisamplingInfo.minSampleShading = 1.0f; // Optional
-    MultisamplingInfo.pSampleMask = nullptr; // Optional
+    MultisamplingInfo.pSampleMask = NULL; // Optional
     MultisamplingInfo.alphaToCoverageEnable = VK_FALSE; // Optional
     MultisamplingInfo.alphaToOneEnable = VK_FALSE; // Optional 
 
@@ -811,6 +761,43 @@ void Win32InitVulkan(HWND Window, HINSTANCE hInst)
     */
 
 
+    /*Create Vertex Buffer*/
+    VkBufferCreateInfo BufferInfo{};
+    
+    BufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    BufferInfo.size = sizeof(Vertex) *VERTEX_COUNT; 
+    BufferInfo.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+    BufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+    VkBuffer VertexBuffer;
+    if (vkCreateBuffer(LogicalDevice, &BufferInfo, NULL, &VertexBuffer) != VK_SUCCESS)
+    {
+                MessageBox(NULL, "Failed to create Vertex Buffer!",
+                            ENGINE_NAME, MB_ICONERROR);
+    }
+    VkMemoryRequirements MemRequirements;
+    vkGetBufferMemoryRequirements(LogicalDevice, VertexBuffer, &MemRequirements);
+
+    VkMemoryAllocateInfo VertexBufferAllocInfo{};
+    VertexBufferAllocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    VertexBufferAllocInfo.allocationSize = MemRequirements.size;
+    VertexBufferAllocInfo.memoryTypeIndex = 
+    FindMemoryType(MemRequirements.memoryTypeBits, 
+    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+
+    VkDeviceMemory VertexBufferMemory;
+    if (vkAllocateMemory(LogicalDevice, &VertexBufferAllocInfo, NULL, &VertexBufferMemory) != VK_SUCCESS) 
+    {
+            MessageBox(NULL, "Failed to allocate Vertex Buffer memory!",
+                        ENGINE_NAME, MB_ICONERROR);
+    }
+
+    vkBindBufferMemory(LogicalDevice, VertexBuffer, VertexBufferMemory, 0);
+
+    void* Data;
+    vkMapMemory(LogicalDevice, VertexBufferMemory, 0, BufferInfo.size, 0, &Data);
+    memcpy(Data, Vertices, (size_t) BufferInfo.size);
+    vkUnmapMemory(LogicalDevice, VertexBufferMemory);
    /*Command Buffer*/
 
     /*Create Command Pool*/
@@ -871,6 +858,7 @@ void Win32InitVulkan(HWND Window, HINSTANCE hInst)
         GlobalVulkanData.CommandBuffers[FrameIndex]= CommandBuffers[FrameIndex];
     }
     GlobalVulkanData.CurrentFrame=0;
+    GlobalVulkanData.VertexBuffer=VertexBuffer;
     
 }
  void RecordCommandBuffer(VkCommandBuffer CommandBuffer, u32 ImageIndex) 
@@ -879,6 +867,8 @@ void Win32InitVulkan(HWND Window, HINSTANCE hInst)
         VkRenderPass RenderPass=GlobalVulkanData.RenderPass;
         VkPipeline GraphicsPipeline = GlobalVulkanData.GraphicsPipeline;
         VkExtent2D Extent = GlobalVulkanData.Extent;
+        VkBuffer VertexBuffer=GlobalVulkanData.VertexBuffer;
+
         u32 ImageCount=GlobalVulkanData.ImageCount;
 
         VkCommandBufferBeginInfo BeginInfo={};
@@ -904,9 +894,14 @@ void Win32InitVulkan(HWND Window, HINSTANCE hInst)
 
         vkCmdBeginRenderPass(CommandBuffer, &RenderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
 
-            vkCmdBindPipeline(CommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, GraphicsPipeline);
+        vkCmdBindPipeline(CommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, GraphicsPipeline);
 
-            vkCmdDraw(CommandBuffer, 3, 1, 0, 0);
+        VkBuffer VertexBuffers[] = {VertexBuffer};
+        VkDeviceSize Offsets[] = {0};
+        vkCmdBindVertexBuffers(CommandBuffer, 0, 1, VertexBuffers, Offsets);
+        
+
+        vkCmdDraw(CommandBuffer, VERTEX_COUNT, 1, 0, 0);
 
         vkCmdEndRenderPass(CommandBuffer);
 
@@ -916,7 +911,45 @@ void Win32InitVulkan(HWND Window, HINSTANCE hInst)
         }
 }   
 
-void DrawFrame()
+void RecreateSwapchain(HWND Window)
+{
+    u32 ImageCount = GlobalVulkanData.ImageCount;
+    VkPhysicalDevice PhysicalDevice =GlobalVulkanData.PhysicalDevice; 
+    VkDevice LogicalDevice=GlobalVulkanData.LogicalDevice;
+    VkSurfaceKHR Surface = GlobalVulkanData.Surface;
+    VkSwapchainKHR Swapchain=GlobalVulkanData.Swapchain;
+    VkRenderPass RenderPass=GlobalVulkanData.RenderPass;
+    VkPipeline GraphicsPipeline = GlobalVulkanData.GraphicsPipeline;
+    VkPipelineLayout PipelineLayout = GlobalVulkanData.PipelineLayout;
+    VkFramebuffer *SwapchainFramebuffers = GlobalVulkanData.SwapchainFramebuffers;
+    VkImageView *SwapchainImageViews = GlobalVulkanData.SwapchainImageViews;
+
+    vkDeviceWaitIdle(LogicalDevice);
+
+    /*Cleanup current swapchain*/
+    for (u32 ImageIndex= 0; ImageIndex < ImageCount; ++ImageIndex)
+    {
+        vkDestroyFramebuffer(LogicalDevice, SwapchainFramebuffers[ImageIndex], NULL);
+    }
+
+    vkDestroyPipeline(LogicalDevice, GraphicsPipeline, NULL);
+    vkDestroyPipelineLayout(LogicalDevice, PipelineLayout, NULL);
+    vkDestroyRenderPass(LogicalDevice, RenderPass, NULL);
+
+    for (u32 ImageIndex= 0; ImageIndex < ImageCount; ++ImageIndex)
+    {
+        vkDestroyImageView(LogicalDevice, SwapchainImageViews[ImageIndex], NULL);
+    }
+
+    vkDestroySwapchainKHR(LogicalDevice, Swapchain, NULL);
+
+    /*Recreate the Swapchain*/
+    GlobalVulkanData.Free=GlobalVulkanData.SwapchainMemory;
+    win32CreateSwapchain(Window);
+
+}
+
+void DrawFrame(HWND Window)
 {
     u32 ImageIndex;
     u32 CurrentFrame=GlobalVulkanData.CurrentFrame;
@@ -931,9 +964,21 @@ void DrawFrame()
     VkQueue GraphicsQueue=GlobalVulkanData.GraphicsQueue;
 
     vkWaitForFences(LogicalDevice, 1, &InFlightFence, VK_TRUE, U64MAX);
-    vkResetFences(LogicalDevice, 1, &InFlightFence);
 
-    vkAcquireNextImageKHR(LogicalDevice, Swapchain, U64MAX, ImageAvailableSemaphore, VK_NULL_HANDLE, &ImageIndex);
+    VkResult Result =vkAcquireNextImageKHR(LogicalDevice, Swapchain, U64MAX, 
+                        ImageAvailableSemaphore, VK_NULL_HANDLE, &ImageIndex);
+    if(Result == VK_ERROR_OUT_OF_DATE_KHR)
+    {
+        RecreateSwapchain(Window);
+        return;
+    }
+    else if(Result != VK_SUCCESS && Result != VK_SUBOPTIMAL_KHR)
+    {
+                MessageBox(NULL, "Failed to acquire next swapchain image!",
+                            ENGINE_NAME, MB_ICONERROR);
+    }
+
+    vkResetFences(LogicalDevice, 1, &InFlightFence);
 
     vkResetCommandBuffer(CommandBuffer, 0);
     RecordCommandBuffer(CommandBuffer, ImageIndex);
@@ -971,47 +1016,22 @@ void DrawFrame()
     PresentInfo.pImageIndices = &ImageIndex;
     PresentInfo.pResults = NULL; // Optional
 
-    vkQueuePresentKHR(PresentQueue, &PresentInfo);
+    Result = vkQueuePresentKHR(PresentQueue, &PresentInfo);
+
+    if(Result == VK_ERROR_OUT_OF_DATE_KHR || Result == VK_SUBOPTIMAL_KHR)
+    {
+        RecreateSwapchain(Window);
+    }
+    else if(Result != VK_SUCCESS )
+    {
+                MessageBox(NULL, "Failed to present swapchain image!",
+                            ENGINE_NAME, MB_ICONERROR);
+    }
 
     GlobalVulkanData.CurrentFrame = (CurrentFrame + 1)%MAX_FRAMES_IN_FLIGHT;
     
 }
 
-void RecreateSwapchain(HWND Window)
-{
-    u32 ImageCount = GlobalVulkanData.ImageCount;
-    VkPhysicalDevice PhysicalDevice =GlobalVulkanData.PhysicalDevice; 
-    VkDevice LogicalDevice=GlobalVulkanData.LogicalDevice;
-    VkSurfaceKHR Surface = GlobalVulkanData.Surface;
-    VkSwapchainKHR Swapchain=GlobalVulkanData.Swapchain;
-    VkRenderPass RenderPass=GlobalVulkanData.RenderPass;
-    VkPipeline GraphicsPipeline = GlobalVulkanData.GraphicsPipeline;
-    VkPipelineLayout PipelineLayout = GlobalVulkanData.PipelineLayout;
-    VkFramebuffer *SwapchainFramebuffers = GlobalVulkanData.SwapchainFramebuffers;
-    VkImageView *SwapchainImageViews = GlobalVulkanData.SwapchainImageViews;
-
-    vkDeviceWaitIdle(LogicalDevice);
-    /*Cleanup current swapchain*/
-    for (u32 ImageIndex= 0; ImageIndex < ImageCount; ++ImageIndex)
-    {
-        vkDestroyFramebuffer(LogicalDevice, SwapchainFramebuffers[ImageIndex], NULL);
-    }
-
-    vkDestroyPipeline(LogicalDevice, GraphicsPipeline, NULL);
-    vkDestroyPipelineLayout(LogicalDevice, PipelineLayout, NULL);
-    vkDestroyRenderPass(LogicalDevice, RenderPass, NULL);
-
-    for (u32 ImageIndex= 0; ImageIndex < ImageCount; ++ImageIndex)
-    {
-        vkDestroyImageView(LogicalDevice, SwapchainImageViews[ImageIndex], NULL);
-    }
-
-    vkDestroySwapchainKHR(LogicalDevice, Swapchain, NULL);
-
-    GlobalVulkanData.Free=GlobalVulkanData.SwapchainMemory;
-    win32CreateSwapchain(Window);
-
-}
 
 LRESULT CALLBACK MainWindowCallBack(HWND   Window, UINT   Msg, WPARAM wParam, LPARAM lParam)
 {
@@ -1023,6 +1043,19 @@ LRESULT CALLBACK MainWindowCallBack(HWND   Window, UINT   Msg, WPARAM wParam, LP
         case(WM_QUIT):
         GlobalRunning = false;
         break;
+        case(WM_SIZE):
+        if(wParam == SIZE_MINIMIZED)
+            GlobalMinimized = true;
+        else
+            GlobalMinimized=false;
+        case(WM_PAINT):
+        if(GlobalRunning && !GlobalMinimized)
+        {
+            RecreateSwapchain(Window);
+            DrawFrame(Window);
+        }
+        break;
+        
     }
     Result = DefWindowProc(Window, Msg, wParam, lParam);
     return Result;
@@ -1065,6 +1098,7 @@ int APIENTRY WinMain(HINSTANCE hInst, HINSTANCE hInstPrev, PSTR cmdline, int cmd
                 //NOTE(Alex): WM_PAINT bypasses the message queue 
                 //so it needs to be handled in the callback function
             GlobalRunning = true;
+            GlobalMinimized=false;
             Win32InitVulkan(Window, hInst);
             while(GlobalRunning)
             {
@@ -1075,8 +1109,11 @@ int APIENTRY WinMain(HINSTANCE hInst, HINSTANCE hInstPrev, PSTR cmdline, int cmd
                     DispatchMessage(&msg);
 
                 }
-
-                DrawFrame();
+                if(!GlobalRunning)
+                    break;
+                if(GlobalMinimized)
+                    continue;
+                DrawFrame(Window);
             }
 
         }
