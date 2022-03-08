@@ -1,4 +1,9 @@
 
+#define PI32 3.14159265359f
+#define TAU32 6.28318530717958647692f
+
+#include <math.h>
+#include <intrin.h>
 typedef uint64_t u64;
 typedef uint32_t u32;
 typedef uint16_t u16;
@@ -66,6 +71,10 @@ struct VulkanData
     VkBuffer VertexBuffer;
     VkBuffer IndexBuffer;
     VkCommandPool CommandPool;
+    VkDescriptorSetLayout DescriptorSetLayout;
+    VkBuffer UniformBuffers[MAX_FRAMES_IN_FLIGHT];
+    VkDeviceMemory UniformBuffersMemory[MAX_FRAMES_IN_FLIGHT];
+    VkDescriptorSet DescriptorSets[MAX_FRAMES_IN_FLIGHT];
 };
 
 struct v2
@@ -86,12 +95,63 @@ union v3
    };
 };
 
+union v4
+{
+   struct
+   {
+       f32 x,y,z,w;
+   };
+   struct
+   {
+       f32 r,g,b,a;
+   };
+   struct
+   {
+       v3 xyz;
+       f32 _Ingnored1;
+   };
+   struct
+   {
+       v2 xy;
+       v2 _Ignored2;
+   };
+   struct
+   {
+       f32 _Ingnored3;
+       v2 yz;
+       f32 _Ignored4;
+   };
+    __m128 Vec;
+   
+};
+
+union mat4
+{
+    struct
+    {
+        v4 X,Y,Z,W;
+    };
+    struct
+    {
+        __m128 A;
+        __m128 B;
+        __m128 C;
+        __m128 D;
+    };
+    v4 col[4];
+    f32 M[4][4];
+};
+
 struct Vertex
 {
     v2 Position;
     v3 Color;
 };
 
+struct UniformBufferObject
+{
+    mat4 Model,View,Proj;
+};
 
 static Vertex Vertices[VERTEX_COUNT] =
 {
@@ -143,5 +203,39 @@ Clamp(i32 Min, i32 Value, i32 Max)
     else
         Result = Value;
 
+    return Result;
+}
+
+inline v4 
+operator*(v4 A, v4 B)
+{
+    v4 Result={A.x*B.x,A.y*B.y,A.z*B.z,A.w*B.w};
+    return Result;
+
+};
+
+inline v4
+operator*(mat4 M, v4 v)
+{
+    v4 Result ={};
+    __m128 vx = _mm_set_ps1(v.x);
+    __m128 vy = _mm_set_ps1(v.y);
+    __m128 vz = _mm_set_ps1(v.z);
+    __m128 vw = _mm_set_ps1(v.w);
+    Result.Vec = _mm_add_ps(_mm_mul_ps(vx, M.A),
+                           _mm_add_ps(_mm_mul_ps(vy, M.B),
+                           _mm_add_ps(_mm_mul_ps(vz, M.C), _mm_mul_ps(vw, M.D))));
+
+    return Result;
+
+}
+inline mat4
+operator*(mat4 A, mat4 B)
+{
+    mat4 Result;
+    Result.X = A*B.X;
+    Result.Y = A*B.Y;
+    Result.Z = A*B.Z;
+    Result.W = A*B.W;
     return Result;
 }

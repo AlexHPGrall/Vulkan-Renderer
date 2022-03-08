@@ -1,4 +1,9 @@
 
+#include <vector>
+#include<iostream>
+#include <stdexcept>
+#include<cstring>
+
 VkDebugUtilsMessengerEXT debugMessenger;
 const std::vector<const char*> validationLayers = {
     "VK_LAYER_KHRONOS_validation"
