@@ -35,6 +35,7 @@ typedef bool b32;
 #define MAX_FRAMES_IN_FLIGHT 2
 #define VERTEX_COUNT 4
 #define INDEX_COUNT 6
+#define ATTRIBUTES_COUNT 3
 
 struct File
 {
@@ -75,6 +76,10 @@ struct VulkanData
     VkBuffer UniformBuffers[MAX_FRAMES_IN_FLIGHT];
     VkDeviceMemory UniformBuffersMemory[MAX_FRAMES_IN_FLIGHT];
     VkDescriptorSet DescriptorSets[MAX_FRAMES_IN_FLIGHT];
+    VkImage TextureImage;
+    VkDeviceMemory TextureImageMemory;
+    VkImageView TextureImageView;
+    VkSampler TextureSampler;
 };
 
 struct v2
@@ -146,6 +151,7 @@ struct Vertex
 {
     v2 Position;
     v3 Color;
+    v2 TexCoord;
 };
 
 struct UniformBufferObject
@@ -155,10 +161,10 @@ struct UniformBufferObject
 
 static Vertex Vertices[VERTEX_COUNT] =
 {
-    {{-0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}},
-    {{0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}},
-    {{0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}},
-    {{-0.5f, 0.5f}, {1.0f, 1.0f, 1.0f}}
+    {{-0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}, {0.0f, 0.0f}},
+    {{0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}, {1.0f, 0.0f}},
+    {{0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}, {1.0f, 1.0f}},
+    {{-0.5f, 0.5f}, {1.0f, 1.0f, 1.0f}, {0.0f, 1.0f}}
 };
 
 static u16 Indices[]={0,1,2,2,3,0};
@@ -178,17 +184,24 @@ static VkVertexInputBindingDescription GetBindingDescription()
 //Tells how to handle vertex data
 
 
-static VkVertexInputAttributeDescription AttributeDescriptions[2];
+static VkVertexInputAttributeDescription AttributeDescriptions[ATTRIBUTES_COUNT];
 static VkVertexInputAttributeDescription *GetAttributeDescription()
 {
     AttributeDescriptions[0].binding = 0;
     AttributeDescriptions[0].location = 0;
     AttributeDescriptions[0].format = VK_FORMAT_R32G32_SFLOAT;
     AttributeDescriptions[0].offset = OFFSETOF(Vertex, Position);
+
     AttributeDescriptions[1].binding = 0;
     AttributeDescriptions[1].location = 1;
     AttributeDescriptions[1].format = VK_FORMAT_R32G32B32_SFLOAT;
     AttributeDescriptions[1].offset = OFFSETOF(Vertex, Color);
+    
+    AttributeDescriptions[2].binding = 0;
+    AttributeDescriptions[2].location = 2;
+    AttributeDescriptions[2].format = VK_FORMAT_R32G32_SFLOAT;
+    AttributeDescriptions[2].offset = OFFSETOF(Vertex, TexCoord);
+
     return AttributeDescriptions;
 }
 

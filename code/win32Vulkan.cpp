@@ -3,6 +3,9 @@
 #include <float.h>
 #include <assert.h>
 
+#define STB_IMAGE_IMPLEMENTATION
+#include <stb_image.h>
+
 #include "vulkan/vulkan_core.h"
 #include "vulkan/vk_platform.h"
 #include "vulkan/vulkan_win32.h"
@@ -19,8 +22,16 @@ static VulkanData GlobalVulkanData;
 //static win32_image_buffer GlobalBackBuffer;
 #define APPLICATION_NAME "Vulkan Example"
 #define ENGINE_NAME "Vulkan Engine"
+void ErrorMessageBox(const char *ErrorMessage)
+{
+        GlobalRunning=false;
+        MessageBox(NULL, ErrorMessage,
+                ENGINE_NAME, MB_ICONERROR);
+        while(true)
+        {
 
-
+        }
+}
 File win32ReadEntireFile(char *Filename)
 {
     File Result={};
@@ -56,6 +67,295 @@ File win32ReadEntireFile(char *Filename)
     return Result;
 }
 
+VkImageView CreateImageView(VkDevice LogicalDevice, VkImage Image, VkFormat Format) {
+    VkImageViewCreateInfo ViewInfo{};
+    ViewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    ViewInfo.image = Image;
+    ViewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    ViewInfo.format = Format;
+    ViewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    ViewInfo.subresourceRange.baseMipLevel = 0;
+    ViewInfo.subresourceRange.levelCount = 1;
+    ViewInfo.subresourceRange.baseArrayLayer = 0;
+    ViewInfo.subresourceRange.layerCount = 1;
+
+    VkImageView ImageView;
+    if (vkCreateImageView(LogicalDevice, &ViewInfo, NULL, &ImageView) != VK_SUCCESS) {
+        ErrorMessageBox("failed to create texture image view!");
+    }
+
+    return ImageView;
+}
+
+u32 FindMemoryType(u32 TypeFilter, VkMemoryPropertyFlags Properties) {
+    VkPhysicalDeviceMemoryProperties MemProperties;
+    VkPhysicalDevice PhysicalDevice = GlobalVulkanData.PhysicalDevice;
+    vkGetPhysicalDeviceMemoryProperties(PhysicalDevice, &MemProperties);
+
+    for (u32  MemTypeIndex= 0; MemTypeIndex < MemProperties.memoryTypeCount; MemTypeIndex++) 
+    {
+        if ((TypeFilter & (1 << MemTypeIndex)) 
+                && (MemProperties.memoryTypes[MemTypeIndex].propertyFlags & Properties) == Properties) 
+        {
+            return MemTypeIndex;
+        }
+    }
+    ErrorMessageBox( "Failed to find suitable memory type!");
+    return -1;
+
+}
+
+void CreateVulkanBuffer(VkDeviceSize Size, VkBufferUsageFlags Usage, VkMemoryPropertyFlags Properties,
+        VkBuffer *Buffer, VkDeviceMemory *BufferMemory)
+{
+    VkDevice LogicalDevice = GlobalVulkanData.LogicalDevice;
+    VkBufferCreateInfo BufferInfo{};
+
+    BufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    BufferInfo.size = Size; 
+    BufferInfo.usage = Usage;
+    BufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+    if (vkCreateBuffer(LogicalDevice, &BufferInfo, NULL, Buffer) != VK_SUCCESS)
+    {
+        ErrorMessageBox("Failed to create Vertex Buffer!");
+    }
+    VkMemoryRequirements MemRequirements;
+    vkGetBufferMemoryRequirements(LogicalDevice, *Buffer, &MemRequirements);
+
+    VkMemoryAllocateInfo BufferAllocInfo{};
+    BufferAllocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    BufferAllocInfo.allocationSize = MemRequirements.size;
+    BufferAllocInfo.memoryTypeIndex = 
+        FindMemoryType(MemRequirements.memoryTypeBits, 
+                Properties);
+
+    if (vkAllocateMemory(LogicalDevice, &BufferAllocInfo, NULL, BufferMemory) != VK_SUCCESS) 
+    {
+        ErrorMessageBox("Failed to allocate Vertex Buffer memory!");
+    }
+
+    vkBindBufferMemory(LogicalDevice, *Buffer, *BufferMemory, 0);
+}
+
+VkCommandBuffer BeginSingleTimeCommands() {
+    VkDevice LogicalDevice =GlobalVulkanData.LogicalDevice;
+    VkCommandPool CommandPool=GlobalVulkanData.CommandPool;
+
+    VkCommandBufferAllocateInfo AllocInfo{};
+    AllocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    AllocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    AllocInfo.commandPool = CommandPool;
+    AllocInfo.commandBufferCount = 1;
+
+    VkCommandBuffer CommandBuffer;
+    vkAllocateCommandBuffers(LogicalDevice, &AllocInfo, &CommandBuffer);
+
+    VkCommandBufferBeginInfo BeginInfo{};
+    BeginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    BeginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+
+    vkBeginCommandBuffer(CommandBuffer, &BeginInfo);
+
+    return CommandBuffer;
+}
+
+void EndSingleTimeCommands(VkCommandBuffer CommandBuffer) {
+    VkDevice LogicalDevice =GlobalVulkanData.LogicalDevice;
+    VkQueue GraphicsQueue = GlobalVulkanData.GraphicsQueue;
+    VkCommandPool CommandPool=GlobalVulkanData.CommandPool;
+
+    vkEndCommandBuffer(CommandBuffer);
+
+    VkSubmitInfo SubmitInfo{};
+    SubmitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    SubmitInfo.commandBufferCount = 1;
+    SubmitInfo.pCommandBuffers = &CommandBuffer;
+
+    vkQueueSubmit(GraphicsQueue, 1, &SubmitInfo, VK_NULL_HANDLE);
+    vkQueueWaitIdle(GraphicsQueue);
+
+    vkFreeCommandBuffers(LogicalDevice, CommandPool, 1, &CommandBuffer);
+}
+
+void CopyBuffer(VkBuffer srcBuffer, VkBuffer dstBuffer, VkDeviceSize Size) 
+{
+    VkCommandBuffer CommandBuffer = BeginSingleTimeCommands();
+
+    VkBufferCopy CopyRegion{};
+    CopyRegion.size = Size;
+    vkCmdCopyBuffer(CommandBuffer, srcBuffer, dstBuffer, 1, &CopyRegion);
+
+    EndSingleTimeCommands(CommandBuffer);
+}
+
+void CreateVulkanImage(VkDevice LogicalDevice, u32 Width, u32 Height, VkFormat Format, VkImageTiling Tiling, 
+        VkImageUsageFlags Usage, VkMemoryPropertyFlags Properties, VkImage& Image, VkDeviceMemory& ImageMemory) {
+    VkImageCreateInfo ImageInfo{};
+    ImageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    ImageInfo.imageType = VK_IMAGE_TYPE_2D;
+    ImageInfo.extent.width = Width;
+    ImageInfo.extent.height = Height;
+    ImageInfo.extent.depth = 1;
+    ImageInfo.mipLevels = 1;
+    ImageInfo.arrayLayers = 1;
+    ImageInfo.format = Format;
+    ImageInfo.tiling = Tiling;
+    ImageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    ImageInfo.usage = Usage;
+    ImageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+    ImageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+    if (vkCreateImage(LogicalDevice, &ImageInfo, NULL, &Image) != VK_SUCCESS) {
+        ErrorMessageBox("Failed to create Image!");
+    }
+
+    VkMemoryRequirements MemRequirements;
+    vkGetImageMemoryRequirements(LogicalDevice, Image, &MemRequirements);
+
+    VkMemoryAllocateInfo AllocInfo{};
+    AllocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    AllocInfo.allocationSize = MemRequirements.size;
+    AllocInfo.memoryTypeIndex = FindMemoryType(MemRequirements.memoryTypeBits, Properties);
+
+    if (vkAllocateMemory(LogicalDevice, &AllocInfo, NULL, &ImageMemory) != VK_SUCCESS) {
+        ErrorMessageBox("Failed to Allocate Image Memory!");
+    }
+
+    vkBindImageMemory(LogicalDevice, Image, ImageMemory, 0);
+}
+
+void TransitionImageLayout(VkImage Image, VkFormat Format, VkImageLayout OldLayout, VkImageLayout NewLayout) {
+    VkCommandBuffer CommandBuffer = BeginSingleTimeCommands();
+
+    VkImageMemoryBarrier Barrier{};
+    Barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    Barrier.oldLayout = OldLayout;
+    Barrier.newLayout = NewLayout;
+    Barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    Barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    Barrier.image = Image;
+    Barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    Barrier.subresourceRange.baseMipLevel = 0;
+    Barrier.subresourceRange.levelCount = 1;
+    Barrier.subresourceRange.baseArrayLayer = 0;
+    Barrier.subresourceRange.layerCount = 1;
+
+    VkPipelineStageFlags SourceStage;
+    VkPipelineStageFlags DestinationStage;
+
+    if (OldLayout == VK_IMAGE_LAYOUT_UNDEFINED && NewLayout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL) {
+        Barrier.srcAccessMask = 0;
+        Barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+
+        SourceStage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+        DestinationStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+    } 
+    else if (OldLayout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL && NewLayout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
+        Barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        Barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+
+        SourceStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+        DestinationStage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    } 
+    else {
+        ErrorMessageBox("unsupported layout transition!");
+    }
+
+    vkCmdPipelineBarrier(CommandBuffer, SourceStage, DestinationStage,0,0, NULL,
+                        0, NULL,1, &Barrier);
+
+    EndSingleTimeCommands(CommandBuffer);
+}
+
+void CopyBufferToImage(VkBuffer Buffer, VkImage Image, u32 Width, u32 Height) {
+    VkCommandBuffer CommandBuffer = BeginSingleTimeCommands();
+
+    VkBufferImageCopy Region{};
+    Region.bufferOffset = 0;
+    Region.bufferRowLength = 0;
+    Region.bufferImageHeight = 0;
+    Region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    Region.imageSubresource.mipLevel = 0;
+    Region.imageSubresource.baseArrayLayer = 0;
+    Region.imageSubresource.layerCount = 1;
+    Region.imageOffset = {0, 0, 0};
+    Region.imageExtent = {Width,Height,1};
+
+    vkCmdCopyBufferToImage(CommandBuffer, Buffer, Image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &Region);
+
+    EndSingleTimeCommands(CommandBuffer);
+}
+
+void CreateTextureImage(VkDevice LogicalDevice) {
+    i32 texWidth, texHeight, texChannels;
+    stbi_uc* pixels = stbi_load("../data/textures/owl.jpg", &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
+    VkDeviceSize ImageSize = texWidth * texHeight * 4;
+
+    if (!pixels) {
+        ErrorMessageBox("Failed to load texture!");
+    }
+
+    VkBuffer StagingBuffer;
+    VkDeviceMemory StagingBufferMemory;
+    CreateVulkanBuffer(ImageSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, 
+    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+    &StagingBuffer, &StagingBufferMemory);
+
+    void* Data;
+    vkMapMemory(LogicalDevice, StagingBufferMemory, 0, ImageSize, 0, &Data); 
+    memcpy(Data, pixels, (size_t)(ImageSize));
+    vkUnmapMemory(LogicalDevice, StagingBufferMemory);
+
+    stbi_image_free(pixels);
+
+    CreateVulkanImage(LogicalDevice, texWidth, texHeight, VK_FORMAT_R8G8B8A8_SRGB,
+    VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+    VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, GlobalVulkanData.TextureImage, GlobalVulkanData.TextureImageMemory);
+
+    TransitionImageLayout(GlobalVulkanData.TextureImage, VK_FORMAT_R8G8B8A8_SRGB, 
+            VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+    CopyBufferToImage(StagingBuffer, GlobalVulkanData.TextureImage, (u32)(texWidth), (u32)(texHeight));
+    TransitionImageLayout(GlobalVulkanData.TextureImage, VK_FORMAT_R8G8B8A8_SRGB, 
+    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+
+    vkDestroyBuffer(LogicalDevice, StagingBuffer, NULL);
+    vkFreeMemory(LogicalDevice, StagingBufferMemory, NULL);
+
+    //Create Texture Image View
+    GlobalVulkanData.TextureImageView=CreateImageView(LogicalDevice, GlobalVulkanData.TextureImage,VK_FORMAT_R8G8B8A8_SRGB);
+
+    //Create Texture image Sampler
+    VkPhysicalDeviceProperties Properties{};
+    vkGetPhysicalDeviceProperties(GlobalVulkanData.PhysicalDevice, &Properties);
+
+    VkSamplerCreateInfo SamplerInfo{};
+    SamplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    //texture filtering params
+    SamplerInfo.magFilter = VK_FILTER_LINEAR;
+    SamplerInfo.minFilter = VK_FILTER_LINEAR;
+
+    //out of bound addressing
+    SamplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    SamplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    SamplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    SamplerInfo.anisotropyEnable = VK_TRUE;
+    SamplerInfo.maxAnisotropy = Properties.limits.maxSamplerAnisotropy;
+    SamplerInfo.borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK;
+    SamplerInfo.unnormalizedCoordinates = VK_FALSE;
+    SamplerInfo.compareEnable = VK_FALSE;
+    SamplerInfo.compareOp = VK_COMPARE_OP_ALWAYS;
+    SamplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+
+    VkSampler TextureSampler;
+    if (vkCreateSampler(LogicalDevice, &SamplerInfo, NULL, &TextureSampler) != VK_SUCCESS) {
+        ErrorMessageBox("failed to create texture sampler!");
+    }
+    GlobalVulkanData.TextureSampler=TextureSampler;
+}
+
+
+
 void UpdateUniformBuffer(u32 CurrentImage)
 {
     VkDevice LogicalDevice = GlobalVulkanData.LogicalDevice;
@@ -87,96 +387,7 @@ void UpdateUniformBuffer(u32 CurrentImage)
 
 }
 
-u32 FindMemoryType(u32 TypeFilter, VkMemoryPropertyFlags Properties) {
-    VkPhysicalDeviceMemoryProperties MemProperties;
-    VkPhysicalDevice PhysicalDevice = GlobalVulkanData.PhysicalDevice;
-    vkGetPhysicalDeviceMemoryProperties(PhysicalDevice, &MemProperties);
 
-    for (u32  MemTypeIndex= 0; MemTypeIndex < MemProperties.memoryTypeCount; MemTypeIndex++) 
-    {
-        if ((TypeFilter & (1 << MemTypeIndex)) 
-                && (MemProperties.memoryTypes[MemTypeIndex].propertyFlags & Properties) == Properties) 
-        {
-            return MemTypeIndex;
-        }
-    }
-    MessageBox(NULL, "Failed to find suitable memory type!",
-            ENGINE_NAME, MB_ICONINFORMATION);
-    return -1;
-
-}
-void CopyBuffer(VkBuffer srcBuffer, VkBuffer dstBuffer, VkDeviceSize Size) 
-{
-    VkDevice LogicalDevice =GlobalVulkanData.LogicalDevice;
-    VkQueue GraphicsQueue = GlobalVulkanData.GraphicsQueue;
-    VkCommandPool CommandPool=GlobalVulkanData.CommandPool;
-
-    VkCommandBufferAllocateInfo AllocInfo{};
-    AllocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-    AllocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-    AllocInfo.commandPool = CommandPool;
-    AllocInfo.commandBufferCount = 1;
-
-    VkCommandBuffer CommandBuffer;
-    vkAllocateCommandBuffers(LogicalDevice, &AllocInfo, &CommandBuffer);
-
-    VkCommandBufferBeginInfo BeginInfo{};
-    BeginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-    BeginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-
-    vkBeginCommandBuffer(CommandBuffer, &BeginInfo);
-
-    VkBufferCopy CopyRegion{};
-    CopyRegion.size = Size;
-    vkCmdCopyBuffer(CommandBuffer, srcBuffer, dstBuffer, 1, &CopyRegion);
-
-    vkEndCommandBuffer(CommandBuffer);
-
-    VkSubmitInfo SubmitInfo{};
-    SubmitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-    SubmitInfo.commandBufferCount = 1;
-    SubmitInfo.pCommandBuffers = &CommandBuffer;
-
-    vkQueueSubmit(GraphicsQueue, 1, &SubmitInfo, VK_NULL_HANDLE);
-    vkQueueWaitIdle(GraphicsQueue);
-
-    vkFreeCommandBuffers(LogicalDevice, CommandPool, 1, &CommandBuffer);
-}
-
-void CreateVulkanBuffer(VkDeviceSize Size, VkBufferUsageFlags Usage, VkMemoryPropertyFlags Properties,
-        VkBuffer *Buffer, VkDeviceMemory *BufferMemory)
-{
-    VkDevice LogicalDevice = GlobalVulkanData.LogicalDevice;
-    VkBufferCreateInfo BufferInfo{};
-
-    BufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    BufferInfo.size = Size; 
-    BufferInfo.usage = Usage;
-    BufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-
-    if (vkCreateBuffer(LogicalDevice, &BufferInfo, NULL, Buffer) != VK_SUCCESS)
-    {
-        MessageBox(NULL, "Failed to create Vertex Buffer!",
-                ENGINE_NAME, MB_ICONERROR);
-    }
-    VkMemoryRequirements MemRequirements;
-    vkGetBufferMemoryRequirements(LogicalDevice, *Buffer, &MemRequirements);
-
-    VkMemoryAllocateInfo BufferAllocInfo{};
-    BufferAllocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-    BufferAllocInfo.allocationSize = MemRequirements.size;
-    BufferAllocInfo.memoryTypeIndex = 
-        FindMemoryType(MemRequirements.memoryTypeBits, 
-                Properties);
-
-    if (vkAllocateMemory(LogicalDevice, &BufferAllocInfo, NULL, BufferMemory) != VK_SUCCESS) 
-    {
-        MessageBox(NULL, "Failed to allocate Vertex Buffer memory!",
-                ENGINE_NAME, MB_ICONERROR);
-    }
-
-    vkBindBufferMemory(LogicalDevice, *Buffer, *BufferMemory, 0);
-}
 
 void *VulkanMemAlloc(u32 Size)
 {
@@ -184,6 +395,139 @@ void *VulkanMemAlloc(u32 Size)
     GlobalVulkanData.Free=(u8 *)GlobalVulkanData.Free+Size;
 
     return Result;
+}
+
+void CreateDescriptorSetLayout(VkDevice LogicalDevice)
+{
+    /*Create Descriptor Set Layout*/
+    //uniform buffer object Descriptor set layout
+    VkDescriptorSetLayout DescriptorSetLayout;
+    VkDescriptorSetLayoutBinding UboLayoutBinding{};
+    UboLayoutBinding.binding = 0;
+    UboLayoutBinding.descriptorCount = 1;
+    UboLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    UboLayoutBinding.pImmutableSamplers = NULL;
+    UboLayoutBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+    
+    //Sampler Descriptor Set Layout
+    //appended to the end
+    VkDescriptorSetLayoutBinding SamplerLayoutBinding{};
+    SamplerLayoutBinding.binding = 1;
+    SamplerLayoutBinding.descriptorCount = 1;
+    SamplerLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    SamplerLayoutBinding.pImmutableSamplers = NULL;
+    SamplerLayoutBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+    VkDescriptorSetLayoutBinding Bindings[2] ={UboLayoutBinding, SamplerLayoutBinding}; 
+    VkDescriptorSetLayoutCreateInfo DescriptorSetLayoutInfo{};
+    DescriptorSetLayoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    DescriptorSetLayoutInfo.bindingCount = ArrayCount(Bindings); 
+    DescriptorSetLayoutInfo.pBindings = Bindings;
+
+    if (vkCreateDescriptorSetLayout(LogicalDevice, &DescriptorSetLayoutInfo, 
+                NULL, &DescriptorSetLayout) != VK_SUCCESS)
+    {
+
+        ErrorMessageBox("Failed to Create Descriptor Set Layout!");
+    }                                   
+
+    GlobalVulkanData.DescriptorSetLayout=DescriptorSetLayout;
+}
+
+void CreateDescriptorSet(VkDevice LogicalDevice)
+{
+    VkDescriptorSetLayout DescriptorSetLayout =GlobalVulkanData.DescriptorSetLayout;
+    /*Create Descriptor Pool*/
+    VkDescriptorPool DescriptorPool;
+    VkDescriptorPoolSize PoolSizes[2]={};
+    PoolSizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    PoolSizes[0].descriptorCount = (MAX_FRAMES_IN_FLIGHT);
+    PoolSizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    PoolSizes[1].descriptorCount = (MAX_FRAMES_IN_FLIGHT);
+
+    VkDescriptorPoolCreateInfo PoolInfo{};
+    PoolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    PoolInfo.poolSizeCount = ArrayCount(PoolSizes);
+    PoolInfo.pPoolSizes = PoolSizes;
+    PoolInfo.maxSets = MAX_FRAMES_IN_FLIGHT;
+
+    if (vkCreateDescriptorPool(LogicalDevice, &PoolInfo, NULL, &DescriptorPool) != VK_SUCCESS) 
+    {
+        ErrorMessageBox("Failed to create Descriptor Pool!");
+    }
+
+    /*Create Descriptor Sets*/
+    VkDescriptorSetLayout Layouts[MAX_FRAMES_IN_FLIGHT]={0}; 
+    for(u32 LayoutIndex=0;LayoutIndex<MAX_FRAMES_IN_FLIGHT; ++LayoutIndex)
+    {
+        Layouts[LayoutIndex]=DescriptorSetLayout;
+    }
+    VkDescriptorSetAllocateInfo DescriptorSetAllocInfo{};
+    DescriptorSetAllocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    DescriptorSetAllocInfo.descriptorPool = DescriptorPool;
+    DescriptorSetAllocInfo.descriptorSetCount = (MAX_FRAMES_IN_FLIGHT);
+    DescriptorSetAllocInfo.pSetLayouts = Layouts;
+
+    VkDescriptorSet DescriptorSets[MAX_FRAMES_IN_FLIGHT]={0};
+
+    if (vkAllocateDescriptorSets(LogicalDevice, &DescriptorSetAllocInfo, DescriptorSets) != VK_SUCCESS) 
+    {
+        ErrorMessageBox("Failed to allocate Descriptor Sets!");
+    }
+
+    for (u32 FrameIndex = 0; FrameIndex < MAX_FRAMES_IN_FLIGHT; FrameIndex++) 
+    {
+        VkDescriptorBufferInfo DescriptorBufferInfo{};
+        DescriptorBufferInfo.buffer = GlobalVulkanData.UniformBuffers[FrameIndex];
+        DescriptorBufferInfo.offset = 0;
+        DescriptorBufferInfo.range = sizeof(UniformBufferObject);
+
+        VkDescriptorImageInfo ImageInfo{};
+        ImageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        ImageInfo.imageView = GlobalVulkanData.TextureImageView;
+        ImageInfo.sampler = GlobalVulkanData.TextureSampler;
+
+        VkWriteDescriptorSet DescriptorWrites[2]={};
+
+        DescriptorWrites[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        DescriptorWrites[0].dstSet = DescriptorSets[FrameIndex];
+        DescriptorWrites[0].dstBinding = 0;
+        DescriptorWrites[0].dstArrayElement = 0;
+        DescriptorWrites[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        DescriptorWrites[0].descriptorCount = 1;
+        DescriptorWrites[0].pBufferInfo = &DescriptorBufferInfo;
+
+        DescriptorWrites[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        DescriptorWrites[1].dstSet = DescriptorSets[FrameIndex];
+        DescriptorWrites[1].dstBinding = 1;
+        DescriptorWrites[1].dstArrayElement = 0;
+        DescriptorWrites[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        DescriptorWrites[1].descriptorCount = 1;
+        DescriptorWrites[1].pImageInfo = &ImageInfo;
+
+        vkUpdateDescriptorSets(LogicalDevice, ArrayCount(DescriptorWrites), DescriptorWrites, 0, NULL);
+
+        GlobalVulkanData.DescriptorSets[FrameIndex]=DescriptorSets[FrameIndex];
+    }
+}
+
+void CreateUniformBuffers()
+{
+    /*Create Uniform Buffers*/
+    VkDeviceSize BufferSize = sizeof(UniformBufferObject);
+
+    VkBuffer UniformBuffers[MAX_FRAMES_IN_FLIGHT];
+    VkDeviceMemory UniformBuffersMemory[MAX_FRAMES_IN_FLIGHT];
+
+    for (u32 UniformBufferIndex= 0; UniformBufferIndex < MAX_FRAMES_IN_FLIGHT; UniformBufferIndex++) 
+    {
+        CreateVulkanBuffer(BufferSize, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, 
+                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                &UniformBuffers[UniformBufferIndex], &UniformBuffersMemory[UniformBufferIndex]);
+
+        GlobalVulkanData.UniformBuffers[UniformBufferIndex] = UniformBuffers[UniformBufferIndex];
+        GlobalVulkanData.UniformBuffersMemory[UniformBufferIndex] = UniformBuffersMemory[UniformBufferIndex];
+    } 
 }
 
 void win32CreateSwapchain(HWND Window)
@@ -231,8 +575,7 @@ void win32CreateSwapchain(HWND Window)
 
     if(FormatCount==0 || PresentModeCount==0)
     {
-        MessageBox(NULL, "Swapchain not suitable",
-                ENGINE_NAME, MB_ICONINFORMATION);
+        ErrorMessageBox("Swapchain not suitable");
     }
     /*Create Swapchain*/
 
@@ -309,8 +652,7 @@ void win32CreateSwapchain(HWND Window)
 
     VkSwapchainKHR Swapchain;
     if(vkCreateSwapchainKHR(LogicalDevice, &SwapchainInfo, NULL, &Swapchain) != VK_SUCCESS)
-        MessageBox(NULL, "Couldn't create Swapchain!",
-                ENGINE_NAME, MB_ICONERROR);
+        ErrorMessageBox("Couldn't create Swapchain!");
 
 
 
@@ -330,26 +672,8 @@ void win32CreateSwapchain(HWND Window)
 
     for(u32 ImageViewIndex=0; ImageViewIndex<ImageCount;++ImageViewIndex)
     {
-        VkImageViewCreateInfo ImageViewInfo={};
-        ImageViewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-        ImageViewInfo.image = SwapchainImages[ImageViewIndex];
-        ImageViewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-        ImageViewInfo.format = SwapchainImageFormat;
-        ImageViewInfo.components.r = VK_COMPONENT_SWIZZLE_IDENTITY;
-        ImageViewInfo.components.g = VK_COMPONENT_SWIZZLE_IDENTITY;
-        ImageViewInfo.components.b = VK_COMPONENT_SWIZZLE_IDENTITY;
-        ImageViewInfo.components.a = VK_COMPONENT_SWIZZLE_IDENTITY;
-        ImageViewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        ImageViewInfo.subresourceRange.baseMipLevel = 0;
-        ImageViewInfo.subresourceRange.levelCount = 1;
-        ImageViewInfo.subresourceRange.baseArrayLayer = 0;
-        ImageViewInfo.subresourceRange.layerCount = 1;
-
-        if (vkCreateImageView(LogicalDevice, &ImageViewInfo, NULL, &SwapchainImageViews[ImageViewIndex]) != VK_SUCCESS)
-        {
-            MessageBox(NULL, "Couldn't create Image Views!",
-                    ENGINE_NAME, MB_ICONERROR);
-        }
+        SwapchainImageViews[ImageViewIndex]=
+            CreateImageView(LogicalDevice,SwapchainImages[ImageViewIndex],SwapchainImageFormat); 
 
     }
 
@@ -360,8 +684,7 @@ void win32CreateSwapchain(HWND Window)
     File FragShaderFile= win32ReadEntireFile("../code/shaders/frag.spv");
     if(!VertShaderFile.Contents || !FragShaderFile.Contents)
     {
-        MessageBox(NULL, "Couldn't open shader file!",
-                ENGINE_NAME, MB_ICONERROR);
+        ErrorMessageBox("Couldn't open shader file!");
     }
     VkShaderModuleCreateInfo VertShaderModuleInfo={};
     VertShaderModuleInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
@@ -371,8 +694,7 @@ void win32CreateSwapchain(HWND Window)
     VkShaderModule VertShaderModule;
     if(vkCreateShaderModule(LogicalDevice, &VertShaderModuleInfo, NULL, &VertShaderModule) != VK_SUCCESS)
     {
-        MessageBox(NULL, "Couldn't create vertex shader module!",
-                ENGINE_NAME, MB_ICONERROR);
+        ErrorMessageBox("Couldn't create vertex shader module!");
     }
 
     VkShaderModuleCreateInfo FragShaderModuleInfo={};
@@ -383,8 +705,7 @@ void win32CreateSwapchain(HWND Window)
     VkShaderModule FragShaderModule;
     if(vkCreateShaderModule(LogicalDevice, &FragShaderModuleInfo, NULL, &FragShaderModule) != VK_SUCCESS)
     {
-        MessageBox(NULL, "Couldn't create fragment shader module!",
-                ENGINE_NAME, MB_ICONERROR);
+        ErrorMessageBox("Couldn't create fragment shader module!");
     }
 
     VkPipelineShaderStageCreateInfo VertShaderStageInfo={};
@@ -412,7 +733,7 @@ void win32CreateSwapchain(HWND Window)
     VertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
     VertexInputInfo.vertexBindingDescriptionCount = 1;
     VertexInputInfo.pVertexBindingDescriptions = &BindingDescritption; 
-    VertexInputInfo.vertexAttributeDescriptionCount = 2;
+    VertexInputInfo.vertexAttributeDescriptionCount = ATTRIBUTES_COUNT;
     VertexInputInfo.pVertexAttributeDescriptions = AttributeDescriptions; 
 
     /*Input Assembly*/
@@ -520,8 +841,7 @@ void win32CreateSwapchain(HWND Window)
 
     if(vkCreatePipelineLayout(LogicalDevice, &PipelineLayoutInfo, NULL, &PipelineLayout) != VK_SUCCESS)
     {
-        MessageBox(NULL, "Failed to create pipeline layout!",
-                ENGINE_NAME, MB_ICONERROR);
+        ErrorMessageBox("Failed to create pipeline layout!");
     }
 
 
@@ -571,8 +891,7 @@ void win32CreateSwapchain(HWND Window)
 
     if (vkCreateRenderPass(LogicalDevice, &RenderPassInfo, NULL, &RenderPass) != VK_SUCCESS)
     {
-        MessageBox(NULL, "Failed to create Render Pass!",
-                ENGINE_NAME, MB_ICONERROR);
+        ErrorMessageBox("Failed to create Render Pass!");
     }
 
     VkGraphicsPipelineCreateInfo PipelineInfo={};
@@ -596,8 +915,7 @@ void win32CreateSwapchain(HWND Window)
     VkPipeline GraphicsPipeline;
     if (vkCreateGraphicsPipelines(LogicalDevice, VK_NULL_HANDLE, 1, &PipelineInfo, NULL, &GraphicsPipeline) != VK_SUCCESS)
     {
-        MessageBox(NULL, "Failed to create Graphics Pipeline!",
-                ENGINE_NAME, MB_ICONERROR);
+        ErrorMessageBox("Failed to create Graphics Pipeline!");
     }
     vkDestroyShaderModule(LogicalDevice, FragShaderModule, NULL);
     vkDestroyShaderModule(LogicalDevice, VertShaderModule, NULL);
@@ -622,78 +940,10 @@ void win32CreateSwapchain(HWND Window)
         FramebufferInfo.layers = 1;
         if(vkCreateFramebuffer(LogicalDevice, &FramebufferInfo, NULL, &SwapchainFramebuffers[FrameBufferIndex]) != VK_SUCCESS)
         {
-            MessageBox(NULL, "Failed to create Framebuffer!",
-                    ENGINE_NAME, MB_ICONERROR);
+            ErrorMessageBox("Failed to create Framebuffer!");
         }
     }
 
-    /*Create Uniform Buffers*/
-    VkDeviceSize BufferSize = sizeof(UniformBufferObject);
-
-    VkBuffer UniformBuffers[MAX_FRAMES_IN_FLIGHT];
-    VkDeviceMemory UniformBuffersMemory[MAX_FRAMES_IN_FLIGHT];
-
-    for (u32 UniformBufferIndex= 0; UniformBufferIndex < MAX_FRAMES_IN_FLIGHT; UniformBufferIndex++) 
-    {
-        CreateVulkanBuffer(BufferSize, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, 
-                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                &UniformBuffers[UniformBufferIndex], &UniformBuffersMemory[UniformBufferIndex]);
-    } 
-    /*Create Descriptor Pool*/
-    VkDescriptorPool DescriptorPool;
-    VkDescriptorPoolSize PoolSize{};
-    PoolSize.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    PoolSize.descriptorCount = (MAX_FRAMES_IN_FLIGHT);
-
-    VkDescriptorPoolCreateInfo PoolInfo{};
-    PoolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    PoolInfo.poolSizeCount = 1;
-    PoolInfo.pPoolSizes = &PoolSize;
-    PoolInfo.maxSets = MAX_FRAMES_IN_FLIGHT;
-
-    if (vkCreateDescriptorPool(LogicalDevice, &PoolInfo, NULL, &DescriptorPool) != VK_SUCCESS) 
-    {
-        MessageBox(NULL, "Failed to create Descriptor Pool!",
-                ENGINE_NAME, MB_ICONERROR);
-    }
-    /*Create Descriptor Sets*/
-    VkDescriptorSetLayout Layouts[MAX_FRAMES_IN_FLIGHT]={0}; 
-    for(u32 LayoutIndex=0;LayoutIndex<MAX_FRAMES_IN_FLIGHT; ++LayoutIndex)
-    {
-        Layouts[LayoutIndex]=DescriptorSetLayout;
-    }
-    VkDescriptorSetAllocateInfo DescriptorSetAllocInfo{};
-    DescriptorSetAllocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-    DescriptorSetAllocInfo.descriptorPool = DescriptorPool;
-    DescriptorSetAllocInfo.descriptorSetCount = (MAX_FRAMES_IN_FLIGHT);
-    DescriptorSetAllocInfo.pSetLayouts = Layouts;
-
-    VkDescriptorSet DescriptorSets[MAX_FRAMES_IN_FLIGHT]={0};
-
-    if (vkAllocateDescriptorSets(LogicalDevice, &DescriptorSetAllocInfo, DescriptorSets) != VK_SUCCESS) 
-    {
-        MessageBox(NULL, "Failed to allocate Descriptor Sets!",
-                ENGINE_NAME, MB_ICONERROR);
-    }
-
-    for (u32 FrameIndex = 0; FrameIndex < MAX_FRAMES_IN_FLIGHT; FrameIndex++) 
-    {
-        VkDescriptorBufferInfo DescriptorBufferInfo{};
-        DescriptorBufferInfo.buffer = UniformBuffers[FrameIndex];
-        DescriptorBufferInfo.offset = 0;
-        DescriptorBufferInfo.range = sizeof(UniformBufferObject);
-
-        VkWriteDescriptorSet DescriptorWrite{};
-        DescriptorWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        DescriptorWrite.dstSet = DescriptorSets[FrameIndex];
-        DescriptorWrite.dstBinding = 0;
-        DescriptorWrite.dstArrayElement = 0;
-        DescriptorWrite.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-        DescriptorWrite.descriptorCount = 1;
-        DescriptorWrite.pBufferInfo = &DescriptorBufferInfo;
-
-        vkUpdateDescriptorSets(LogicalDevice, 1, &DescriptorWrite, 0, NULL);
-    }
 
     GlobalVulkanData.Swapchain = Swapchain;
     GlobalVulkanData.ImageCount=ImageCount;
@@ -704,12 +954,6 @@ void win32CreateSwapchain(HWND Window)
     GlobalVulkanData.Extent = Extent;
     GlobalVulkanData.PipelineLayout = PipelineLayout;
 
-    for (u32 UniformBufferIndex= 0; UniformBufferIndex < MAX_FRAMES_IN_FLIGHT; UniformBufferIndex++) 
-    {
-        GlobalVulkanData.UniformBuffers[UniformBufferIndex] = UniformBuffers[UniformBufferIndex];
-        GlobalVulkanData.UniformBuffersMemory[UniformBufferIndex] = UniformBuffersMemory[UniformBufferIndex];
-        GlobalVulkanData.DescriptorSets[UniformBufferIndex]=DescriptorSets[UniformBufferIndex];
-    }
 
 }
 
@@ -726,8 +970,7 @@ void Win32InitVulkan(HWND Window, HINSTANCE hInst)
 
     if (enableValidationLayers && !checkValidationLayerSupport())
     {
-        MessageBox(NULL, "Validation Layers requested but not available!",
-                ENGINE_NAME, MB_ICONERROR);
+        ErrorMessageBox("Validation Layers requested but not available!");
     }
     /*Initialize Vulkan Instance*/
 
@@ -767,11 +1010,9 @@ void Win32InitVulkan(HWND Window, HINSTANCE hInst)
     if(InstanceResult != VK_SUCCESS)
     {
         if(InstanceResult == VK_ERROR_INCOMPATIBLE_DRIVER)
-            MessageBox(NULL, "Incompatible driver. Create Instance failed",
-                    ENGINE_NAME, MB_ICONERROR);
+            ErrorMessageBox("Incompatible driver. Create Instance failed");
         else
-            MessageBox(NULL, "Create Instance failed",
-                    ENGINE_NAME, MB_ICONERROR);
+            ErrorMessageBox("Create Instance failed");
         vkDestroyInstance(Instance, NULL);
     }
     gInstance=Instance;
@@ -889,6 +1130,10 @@ void Win32InitVulkan(HWND Window, HINSTANCE hInst)
     }
 
     char * DeviceEnabledExtensions[1] = { VK_KHR_SWAPCHAIN_EXTENSION_NAME };
+    
+    VkPhysicalDeviceFeatures DeviceFeatures{};
+    DeviceFeatures.samplerAnisotropy = VK_TRUE;
+    
     VkDeviceCreateInfo DeviceInfo={};
     DeviceInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
     DeviceInfo.pNext = NULL;
@@ -897,7 +1142,7 @@ void Win32InitVulkan(HWND Window, HINSTANCE hInst)
     DeviceInfo.pQueueCreateInfos = QueueCreateInfos;
     DeviceInfo.enabledExtensionCount = 1;
     DeviceInfo.ppEnabledExtensionNames = DeviceEnabledExtensions;
-    DeviceInfo.pEnabledFeatures = NULL;
+    DeviceInfo.pEnabledFeatures = &DeviceFeatures;
 
     VkDevice LogicalDevice;
     VkResult DeviceResult = vkCreateDevice(PhysicalDevice, &DeviceInfo,
@@ -909,27 +1154,6 @@ void Win32InitVulkan(HWND Window, HINSTANCE hInst)
     VkQueue PresentQueue;
     vkGetDeviceQueue(LogicalDevice, PresentQueueIndex,0, &PresentQueue);
 
-    /*Create Descriptor Set Layout*/
-    VkDescriptorSetLayout DescriptorSetLayout;
-    VkDescriptorSetLayoutBinding UboLayoutBinding{};
-    UboLayoutBinding.binding = 0;
-    UboLayoutBinding.descriptorCount = 1;
-    UboLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    UboLayoutBinding.pImmutableSamplers = NULL;
-    UboLayoutBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
-
-    VkDescriptorSetLayoutCreateInfo DescriptorSetLayoutInfo{};
-    DescriptorSetLayoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    DescriptorSetLayoutInfo.bindingCount = 1;
-    DescriptorSetLayoutInfo.pBindings = &UboLayoutBinding;
-
-    if (vkCreateDescriptorSetLayout(LogicalDevice, &DescriptorSetLayoutInfo, 
-                NULL, &DescriptorSetLayout) != VK_SUCCESS)
-    {
-
-        MessageBox(NULL, "Failed to Create Descriptor Set Layout!",
-                ENGINE_NAME, MB_ICONERROR);
-    }                                   
 
     GlobalVulkanData.PhysicalDevice=PhysicalDevice;
     GlobalVulkanData.LogicalDevice=LogicalDevice;
@@ -938,7 +1162,8 @@ void Win32InitVulkan(HWND Window, HINSTANCE hInst)
     GlobalVulkanData.PresentQueueIndex=PresentQueueIndex;
     GlobalVulkanData.GraphicsQueue = GraphicsQueue;
     GlobalVulkanData.PresentQueue=PresentQueue;
-    GlobalVulkanData.DescriptorSetLayout=DescriptorSetLayout;
+
+    CreateDescriptorSetLayout(LogicalDevice);
 
     //Here starts the swapchain block
     GlobalVulkanData.SwapchainMemory = GlobalVulkanData.Free;
@@ -970,8 +1195,7 @@ void Win32InitVulkan(HWND Window, HINSTANCE hInst)
     VkCommandPool CommandPool;
     if(vkCreateCommandPool(LogicalDevice, &CommandPoolInfo, NULL, &CommandPool) != VK_SUCCESS)
     {
-        MessageBox(NULL, "Failed to create Command Pool!",
-                ENGINE_NAME, MB_ICONERROR);
+        ErrorMessageBox("Failed to create Command Pool!");
     }
 
     GlobalVulkanData.CommandPool=CommandPool;
@@ -985,9 +1209,11 @@ void Win32InitVulkan(HWND Window, HINSTANCE hInst)
     CommandBufferAllocInfo.commandBufferCount = MAX_FRAMES_IN_FLIGHT;
     if(vkAllocateCommandBuffers(LogicalDevice, &CommandBufferAllocInfo, CommandBuffers) != VK_SUCCESS)
     {
-        MessageBox(NULL, "Failed to Allocate Command Buffers!",
-                ENGINE_NAME, MB_ICONERROR);
+        ErrorMessageBox("Failed to Allocate Command Buffers!");
     }
+
+    /*Created Texture Image*/
+    CreateTextureImage(LogicalDevice);
 
     /*Create Vertex Buffer*/
     VkBuffer VertexBuffer;
@@ -1052,11 +1278,12 @@ void Win32InitVulkan(HWND Window, HINSTANCE hInst)
                 vkCreateSemaphore(LogicalDevice, &SemaphoreInfo, NULL, &RenderFinishedSemaphores[FrameIndex]) != VK_SUCCESS ||
                 vkCreateFence(LogicalDevice, &FenceInfo, NULL, &InFlightFences[FrameIndex]) != VK_SUCCESS)
         {
-            MessageBox(NULL, "Failed to create Semaphore!",
-                    ENGINE_NAME, MB_ICONERROR);
+            ErrorMessageBox("Failed to create Semaphore!");
         }
     }
 
+    CreateUniformBuffers();
+    CreateDescriptorSet(LogicalDevice);
     for(u32 FrameIndex=0; FrameIndex<MAX_FRAMES_IN_FLIGHT; ++FrameIndex)
     {
         GlobalVulkanData.ImageAvailableSemaphores[FrameIndex]= ImageAvailableSemaphores[FrameIndex];
@@ -1086,8 +1313,7 @@ void RecordCommandBuffer(VkCommandBuffer CommandBuffer, u32 ImageIndex)
     BeginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
 
     if (vkBeginCommandBuffer(CommandBuffer, &BeginInfo) != VK_SUCCESS) {
-        MessageBox(NULL, "Failed to begin to record command buffer!",
-                ENGINE_NAME, MB_ICONERROR);
+        ErrorMessageBox("Failed to begin to record command buffer!");
     }
 
     VkRenderPassBeginInfo RenderPassInfo={};
@@ -1120,8 +1346,7 @@ void RecordCommandBuffer(VkCommandBuffer CommandBuffer, u32 ImageIndex)
     vkCmdEndRenderPass(CommandBuffer);
 
     if (vkEndCommandBuffer(CommandBuffer) != VK_SUCCESS) {
-        MessageBox(NULL, "Failed to record command buffer!",
-                ENGINE_NAME, MB_ICONERROR);
+        ErrorMessageBox("Failed to record command buffer!");
     }
 }   
 
@@ -1154,11 +1379,6 @@ void RecreateSwapchain(HWND Window)
     for (u32 ImageIndex= 0; ImageIndex < ImageCount; ++ImageIndex)
     {
         vkDestroyImageView(LogicalDevice, SwapchainImageViews[ImageIndex], NULL);
-    }
-    for(u32 UBIndex=0; UBIndex<MAX_FRAMES_IN_FLIGHT;++UBIndex)
-    {
-        vkDestroyBuffer(LogicalDevice, GlobalVulkanData.UniformBuffers[UBIndex],NULL);
-        vkFreeMemory(LogicalDevice, GlobalVulkanData.UniformBuffersMemory[UBIndex],NULL);
     }
 
     vkDestroySwapchainKHR(LogicalDevice, Swapchain, NULL);
@@ -1194,8 +1414,7 @@ void DrawFrame(HWND Window)
     }
     else if(Result != VK_SUCCESS && Result != VK_SUBOPTIMAL_KHR)
     {
-        MessageBox(NULL, "Failed to acquire next swapchain image!",
-                ENGINE_NAME, MB_ICONERROR);
+        ErrorMessageBox("Failed to acquire next swapchain image!");
     }
 
     UpdateUniformBuffer(CurrentFrame);
@@ -1222,8 +1441,7 @@ void DrawFrame(HWND Window)
 
     if(vkQueueSubmit(GraphicsQueue, 1, &SubmitInfo, InFlightFence) != VK_SUCCESS)   
     {
-        MessageBox(NULL, "Failed to submit draw command buffer!",
-                ENGINE_NAME, MB_ICONERROR);
+        ErrorMessageBox("Failed to submit draw command buffer!");
     }
 
 
@@ -1246,8 +1464,7 @@ void DrawFrame(HWND Window)
     }
     else if(Result != VK_SUCCESS )
     {
-        MessageBox(NULL, "Failed to present swapchain image!",
-                ENGINE_NAME, MB_ICONERROR);
+        ErrorMessageBox("Failed to present swapchain image!");
     }
 
     GlobalVulkanData.CurrentFrame = (CurrentFrame + 1)%MAX_FRAMES_IN_FLIGHT;
