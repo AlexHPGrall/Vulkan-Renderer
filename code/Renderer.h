@@ -33,8 +33,8 @@ typedef bool b32;
 #define Terabytes(value) (Gigabytes(value) * 1024LL)
 
 #define MAX_FRAMES_IN_FLIGHT 2
-#define VERTEX_COUNT 4
-#define INDEX_COUNT 6
+#define VERTEX_COUNT 8
+#define INDEX_COUNT 12
 #define ATTRIBUTES_COUNT 3
 
 struct File
@@ -80,6 +80,9 @@ struct VulkanData
     VkDeviceMemory TextureImageMemory;
     VkImageView TextureImageView;
     VkSampler TextureSampler;
+    VkImage DepthImage;
+    VkDeviceMemory DepthImageMemory;
+    VkImageView DepthImageView;
 };
 
 struct v2
@@ -149,7 +152,7 @@ union mat4
 
 struct Vertex
 {
-    v2 Position;
+    v3 Position;
     v3 Color;
     v2 TexCoord;
 };
@@ -161,13 +164,22 @@ struct UniformBufferObject
 
 static Vertex Vertices[VERTEX_COUNT] =
 {
-    {{-0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}, {0.0f, 0.0f}},
-    {{0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}, {1.0f, 0.0f}},
-    {{0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}, {1.0f, 1.0f}},
-    {{-0.5f, 0.5f}, {1.0f, 1.0f, 1.0f}, {0.0f, 1.0f}}
+    {{-0.5f, -0.5f, 0.0f}, {1.0f, 0.0f, 0.0f}, {0.0f, 0.0f}},
+    {{0.5f, -0.5f, 0.0f}, {0.0f, 1.0f, 0.0f}, {1.0f, 0.0f}},
+    {{0.5f, 0.5f, 0.0f}, {0.0f, 0.0f, 1.0f}, {1.0f, 1.0f}},
+    {{-0.5f, 0.5f, 0.0f}, {1.0f, 1.0f, 1.0f}, {0.0f, 1.0f}},
+
+    //flipped owl
+    {{-0.5f, -0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}, {1.0f, 0.0f}},
+    {{0.5f, -0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f}},
+    {{0.5f, 0.5f, -0.5f}, {0.0f, 0.0f, 1.0f}, {0.0f, 1.0f}},
+    {{-0.5f, 0.5f, -0.5f}, {1.0f, 1.0f, 1.0f}, {1.0f, 1.0f}}
 };
 
-static u16 Indices[]={0,1,2,2,3,0};
+static u16 Indices[]={
+    0,1,2,2,3,0,
+    4,5,6,6,7,4
+};
 
 //Depends on vertex format, so we might change that later
 
@@ -189,7 +201,7 @@ static VkVertexInputAttributeDescription *GetAttributeDescription()
 {
     AttributeDescriptions[0].binding = 0;
     AttributeDescriptions[0].location = 0;
-    AttributeDescriptions[0].format = VK_FORMAT_R32G32_SFLOAT;
+    AttributeDescriptions[0].format = VK_FORMAT_R32G32B32_SFLOAT;
     AttributeDescriptions[0].offset = OFFSETOF(Vertex, Position);
 
     AttributeDescriptions[1].binding = 0;

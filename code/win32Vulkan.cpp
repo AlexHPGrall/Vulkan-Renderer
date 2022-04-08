@@ -67,13 +67,15 @@ File win32ReadEntireFile(char *Filename)
     return Result;
 }
 
-VkImageView CreateImageView(VkDevice LogicalDevice, VkImage Image, VkFormat Format) {
+
+VkImageView CreateImageView(VkDevice LogicalDevice, VkImage Image, 
+                            VkFormat Format, VkImageAspectFlags AspectFlags) {
     VkImageViewCreateInfo ViewInfo{};
     ViewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
     ViewInfo.image = Image;
     ViewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
     ViewInfo.format = Format;
-    ViewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    ViewInfo.subresourceRange.aspectMask = AspectFlags;
     ViewInfo.subresourceRange.baseMipLevel = 0;
     ViewInfo.subresourceRange.levelCount = 1;
     ViewInfo.subresourceRange.baseArrayLayer = 0;
@@ -323,7 +325,7 @@ void CreateTextureImage(VkDevice LogicalDevice) {
     vkFreeMemory(LogicalDevice, StagingBufferMemory, NULL);
 
     //Create Texture Image View
-    GlobalVulkanData.TextureImageView=CreateImageView(LogicalDevice, GlobalVulkanData.TextureImage,VK_FORMAT_R8G8B8A8_SRGB);
+    GlobalVulkanData.TextureImageView=CreateImageView(LogicalDevice, GlobalVulkanData.TextureImage,VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_ASPECT_COLOR_BIT);
 
     //Create Texture image Sampler
     VkPhysicalDeviceProperties Properties{};
@@ -355,6 +357,21 @@ void CreateTextureImage(VkDevice LogicalDevice) {
 }
 
 
+void CreateDepthResources() {
+    //Note(Alex): we should do something more sophisticated to select the depth format
+    //for example check wether we need a stencil component
+    VkFormat DepthFormat=VK_FORMAT_D32_SFLOAT;
+    CreateVulkanImage(GlobalVulkanData.LogicalDevice,
+                      GlobalVulkanData.Extent.width, GlobalVulkanData.Extent.height, 
+                      DepthFormat, VK_IMAGE_TILING_OPTIMAL, 
+                      VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, 
+                      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, 
+                      GlobalVulkanData.DepthImage, GlobalVulkanData.DepthImageMemory);
+    GlobalVulkanData.DepthImageView=CreateImageView(GlobalVulkanData.LogicalDevice,
+                                                    GlobalVulkanData.DepthImage,
+                                                    DepthFormat, VK_IMAGE_ASPECT_DEPTH_BIT);
+
+}
 
 void UpdateUniformBuffer(u32 CurrentImage)
 {
@@ -365,8 +382,8 @@ void UpdateUniformBuffer(u32 CurrentImage)
     UniformBufferObject ubo={};
 
     ubo.Model = ZRotationMatrix(0);
-    v4 CameraPos={0.0f, 0.0f, 5.0f,1.0f};
-    mat4 Camera =XRotationMatrix(PI32/4.0f,CameraPos);
+    v4 CameraPos={0.0f, 0.0f, 2.0f,1.0f};
+    mat4 Camera =XRotationMatrix(-PI32/4.0f,CameraPos);
     /*
     ubo.View= InverseRotationAndTranslationMatrix(&Camera);
     ubo.View.W=CameraPos;
@@ -374,8 +391,8 @@ void UpdateUniformBuffer(u32 CurrentImage)
     ubo.View=Camera;
 
     ubo.Proj=ProjectionMatrix(PI32/2.0f, Extent.width, Extent.height);
-    v4 test={1.0f,1.0f,0.0f,1.0f};
-    test=ubo.Proj*ubo.View*ubo.Model*test;
+    //v4 test={1.0f,1.0f,0.0f,1.0f};
+    //test=ubo.Proj*ubo.View*ubo.Model*test;
     //std::cout<<test.x<<" "<<test.y<<" "<<test.z<<" "<<test.w<<std::endl;
     void* Data;
     vkMapMemory(LogicalDevice, UniformBufferMemory, 0, sizeof(ubo), 0, &Data);
@@ -673,7 +690,7 @@ void win32CreateSwapchain(HWND Window)
     for(u32 ImageViewIndex=0; ImageViewIndex<ImageCount;++ImageViewIndex)
     {
         SwapchainImageViews[ImageViewIndex]=
-            CreateImageView(LogicalDevice,SwapchainImages[ImageViewIndex],SwapchainImageFormat); 
+            CreateImageView(LogicalDevice,SwapchainImages[ImageViewIndex],SwapchainImageFormat, VK_IMAGE_ASPECT_COLOR_BIT); 
 
     }
 
@@ -749,8 +766,10 @@ void win32CreateSwapchain(HWND Window)
     //We use the swapchain extent
     Viewport.width = (f32) Extent.width;
     Viewport.height = (f32) Extent.height;
-    Viewport.minDepth = 0.0f;
-    Viewport.maxDepth = 1.0f;
+    //We're using a reverse z-mapping
+    //https://developer.nvidia.com/content/depth-precision-visualized
+    Viewport.minDepth = 1.0f;
+    Viewport.maxDepth = 0.0f;
 
     VkRect2D Scissor{};
     Scissor.offset = {0, 0};
@@ -862,28 +881,48 @@ void win32CreateSwapchain(HWND Window)
     ColorAttachmentRef.attachment = 0;
     ColorAttachmentRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 
+    VkAttachmentDescription DepthAttachment{};
+    DepthAttachment.format = VK_FORMAT_D32_SFLOAT;
+    DepthAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+    DepthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    DepthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    DepthAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    DepthAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    DepthAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    DepthAttachment.finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
+    VkAttachmentReference DepthAttachmentRef{};
+    DepthAttachmentRef.attachment = 1;
+    DepthAttachmentRef.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
     VkSubpassDescription Subpass={};
     Subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
     Subpass.colorAttachmentCount = 1;
     Subpass.pColorAttachments = &ColorAttachmentRef;    
+    Subpass.pDepthStencilAttachment=&DepthAttachmentRef;
 
+    VkAttachmentDescription RenderPassAttachments[2]={ColorAttachment, DepthAttachment};
     VkRenderPass RenderPass;
 
     VkRenderPassCreateInfo RenderPassInfo={};
     RenderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-    RenderPassInfo.attachmentCount = 1;
-    RenderPassInfo.pAttachments = &ColorAttachment;
+    RenderPassInfo.attachmentCount = 2;
+    RenderPassInfo.pAttachments = RenderPassAttachments; 
     RenderPassInfo.subpassCount = 1;
     RenderPassInfo.pSubpasses = &Subpass;
+
 
     //Subpass dependency
     VkSubpassDependency Dependency={};
     Dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
     Dependency.dstSubpass = 0;
-    Dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    Dependency.srcStageMask = 
+    VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
     Dependency.srcAccessMask = 0;
-    Dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-    Dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    Dependency.dstStageMask = 
+    VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+    Dependency.dstAccessMask = 
+    VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
 
     RenderPassInfo.dependencyCount = 1;
     RenderPassInfo.pDependencies = &Dependency;
@@ -893,6 +932,19 @@ void win32CreateSwapchain(HWND Window)
     {
         ErrorMessageBox("Failed to create Render Pass!");
     }
+    /*Piepline Depth Stencils*/
+    VkPipelineDepthStencilStateCreateInfo DepthStencil{};
+    DepthStencil.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+    DepthStencil.depthTestEnable = VK_TRUE;
+    DepthStencil.depthWriteEnable = VK_TRUE;
+    DepthStencil.depthCompareOp = VK_COMPARE_OP_LESS;
+    DepthStencil.depthBoundsTestEnable = VK_FALSE;
+    DepthStencil.minDepthBounds = 0.0f; // Optional
+    DepthStencil.maxDepthBounds = 1.0f; // Optional
+    //Need a compatible depth format before enabling stencils
+    DepthStencil.stencilTestEnable = VK_FALSE;
+    DepthStencil.front = {}; // Optional
+    DepthStencil.back = {}; // Optional
 
     VkGraphicsPipelineCreateInfo PipelineInfo={};
     PipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
@@ -903,13 +955,14 @@ void win32CreateSwapchain(HWND Window)
     PipelineInfo.pViewportState = &ViewportStateInfo;
     PipelineInfo.pRasterizationState = &RasterizerInfo;
     PipelineInfo.pMultisampleState = &MultisamplingInfo;
-    PipelineInfo.pDepthStencilState = NULL; // Optional
     PipelineInfo.pColorBlendState = &ColorBlendingInfo;
     PipelineInfo.pDynamicState = NULL; // Optional
     PipelineInfo.layout = PipelineLayout;
     PipelineInfo.renderPass = RenderPass;
     PipelineInfo.subpass = 0;
     PipelineInfo.basePipelineHandle = VK_NULL_HANDLE; // Optional
+    PipelineInfo.pDepthStencilState = &DepthStencil;
+    
     //PipelineInfo.basePipelineIndex = -1; // Optional
 
     VkPipeline GraphicsPipeline;
@@ -920,6 +973,13 @@ void win32CreateSwapchain(HWND Window)
     vkDestroyShaderModule(LogicalDevice, FragShaderModule, NULL);
     vkDestroyShaderModule(LogicalDevice, VertShaderModule, NULL);
 
+    
+
+    /*Create Depth Buffer*/
+    //we need that now
+    GlobalVulkanData.Extent = Extent;
+    CreateDepthResources();
+
     /* Create FrameBuffers*/
 
     TotalSize += sizeof(VkFramebuffer)*ImageCount;
@@ -928,12 +988,13 @@ void win32CreateSwapchain(HWND Window)
 
     for (u32 FrameBufferIndex= 0; FrameBufferIndex < ImageCount; ++FrameBufferIndex) 
     {
-        VkImageView Attachments[] = {SwapchainImageViews[FrameBufferIndex]};
+        VkImageView Attachments[2] = 
+        {SwapchainImageViews[FrameBufferIndex], GlobalVulkanData.DepthImageView};
 
         VkFramebufferCreateInfo FramebufferInfo={};
         FramebufferInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
         FramebufferInfo.renderPass = RenderPass;
-        FramebufferInfo.attachmentCount = 1;
+        FramebufferInfo.attachmentCount = 2;
         FramebufferInfo.pAttachments = Attachments;
         FramebufferInfo.width = Extent.width;
         FramebufferInfo.height = Extent.height;
@@ -1325,9 +1386,12 @@ void RecordCommandBuffer(VkCommandBuffer CommandBuffer, u32 ImageIndex)
     RenderPassInfo.renderArea.offset = {0, 0};
     RenderPassInfo.renderArea.extent = Extent;
 
-    VkClearValue ClearColor = {{{0.0f, 0.0f, 0.0f, 1.0f}}};
-    RenderPassInfo.clearValueCount = 1;
-    RenderPassInfo.pClearValues = &ClearColor;
+    VkClearValue ClearValues[2]={};
+    ClearValues[0].color = {{0.0f, 0.0f, 0.0f, 1.0f}};
+    ClearValues[1].depthStencil = {1.0f, 0};
+
+    RenderPassInfo.clearValueCount = 2; 
+    RenderPassInfo.pClearValues = ClearValues;
 
     vkCmdBeginRenderPass(CommandBuffer, &RenderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
 
@@ -1380,6 +1444,10 @@ void RecreateSwapchain(HWND Window)
     {
         vkDestroyImageView(LogicalDevice, SwapchainImageViews[ImageIndex], NULL);
     }
+    vkDestroyImageView(LogicalDevice, GlobalVulkanData.DepthImageView, NULL);
+    vkDestroyImage(LogicalDevice, GlobalVulkanData.DepthImage, NULL);
+    vkFreeMemory(LogicalDevice, GlobalVulkanData.DepthImageMemory, NULL);
+    
 
     vkDestroySwapchainKHR(LogicalDevice, Swapchain, NULL);
 

@@ -34,6 +34,8 @@ ProjectionMatrix(f32 fov, f32 Width, f32 Height)
     Result.Y={0,FocalDist/ScreenHalfHeight,0,0};
     Result.Z={0,0,(n)/(n-f),1};
     Result.W={0,0,-(f*n)/(n-f),0};
+    //Note: We're using a reverse Z-mapping
+    //i.e. in NDC near plane is 1 and far plane 0
 
     return Result;
 }
